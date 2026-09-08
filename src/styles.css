@@ -327,6 +327,36 @@ textarea { line-height: 1.55; resize: vertical; }
 .legend-value { color: var(--ink-soft); }
 .legend-item.is-off .legend-value { color: inherit; }
 
+/* ---------------------------------------------------------- measurements */
+
+.measure-head {
+  display: flex; flex-wrap: wrap; gap: var(--sp-3);
+  align-items: center; justify-content: space-between;
+  margin-top: var(--sp-4);
+}
+.measure-scope { font-size: .82rem; color: var(--ink-soft); }
+.measure-head button { min-height: 34px; font-size: .78rem; padding: var(--sp-1) var(--sp-3); }
+
+.measure-table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: var(--sp-2); }
+.measure-table caption {
+  caption-side: bottom; text-align: left;
+  font-size: .76rem; color: var(--ink-soft); padding-top: var(--sp-2);
+}
+.measure-table th, .measure-table td {
+  text-align: right; padding: var(--sp-2);
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--mono); white-space: nowrap;
+}
+.measure-table thead th {
+  font-family: var(--sans); font-size: .76rem; font-weight: 600;
+  color: var(--ink-soft);
+}
+.measure-table th:first-child, .measure-table thead th:first-child { text-align: left; }
+.measure-table tbody th { font-weight: 600; }
+@media (max-width: 640px) {
+  .measure-table { display: block; overflow-x: auto; }
+}
+
 .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
 .seg button { border-radius: 0; border: none; border-right: 1px solid var(--rule); }
 .seg button:last-child { border-right: none; }

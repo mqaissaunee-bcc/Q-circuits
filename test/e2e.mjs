@@ -190,6 +190,100 @@ await page.mouse.up();
 const selCount = await page.evaluate(() => window.__spiceLab.store.selection.size);
 check("box select grabs everything on the sheet", selCount > 4, `${selCount} items`);
 
+/* --------------------------------------------------------- measurements */
+
+console.log("\n— measurements —");
+const sine = await page.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  S.clear();
+  S.edit(() => {
+    const v = S.addComp("V", 200, 180, "V"); v.rot = 90; v.value = "SIN(0 10 60)";
+    const r = S.addComp("R", 460, 180, "R"); r.rot = 90; r.value = "1k";
+    S.addComp("GND", 200, 400, "GND");
+    S.addWire(200, 180, 460, 180);
+    S.addWire(460, 240, 460, 400);
+    S.addWire(460, 400, 200, 400);
+    S.addWire(200, 240, 200, 400);
+    Object.assign(S.state.analysis, { type: "tran", trStep: "20u", trStop: "50m" });
+  }, "t");
+  await window.__spiceLab.run();
+
+  const res = window.__spiceLab.getResult();
+  const xs = res.sweep.values;
+  const ys = res.traces.find((t) => t.name === "v(1)").values;
+  const gaps = [];
+  for (let i = 1; i < xs.length; i++) gaps.push(xs[i] - xs[i - 1]);
+  let sq = 0;
+  for (const v of ys) sq += v * v;
+
+  return {
+    m: window.__spiceLab.scope.measurements().find((x) => x.name === "v(1)"),
+    naiveRms: Math.sqrt(sq / ys.length),
+    stepRatio: Math.max(...gaps) / Math.min(...gaps),
+    headers: [...document.querySelectorAll("#measureHost thead th")].map((th) => th.textContent)
+  };
+});
+
+const RMS = 10 / Math.SQRT2;
+check("peak of a 10 V sine", near(sine.m.max, 10, 1e-5), `${sine.m.max}`);
+check("peak-to-peak", near(sine.m.pp, 20, 1e-5), `${sine.m.pp}`);
+check("mean of a full-cycle sine is zero", Math.abs(sine.m.mean) < 1e-8, `${sine.m.mean}`);
+check("RMS matches Vp/√2", near(sine.m.rms, RMS, 1e-6), `${sine.m.rms} vs ${RMS}`);
+check("frequency recovered as 60 Hz", near(sine.m.freq, 60, 1e-5), `${sine.m.freq}`);
+check("ngspice really did use a variable timestep", sine.stepRatio > 10, `${sine.stepRatio.toFixed(0)}× spread`);
+check("time-weighting beats sample-averaging",
+  Math.abs(sine.m.rms - RMS) < Math.abs(sine.naiveRms - RMS) / 1000,
+  `weighted ${Math.abs(sine.m.rms - RMS).toExponential(1)} vs naive ${Math.abs(sine.naiveRms - RMS).toExponential(1)}`);
+check("transient shows all six measurement columns",
+  sine.headers.join(",") === "Trace,Min,Max,Pk-Pk,Mean,RMS,Freq", sine.headers.join(","));
+
+// drag across the plot to narrow the measurement window.
+// The scope sits below the fold at this viewport, so scroll it into view first
+// or the synthetic mouse events land outside the canvas.
+await page.locator(".scope-canvas").scrollIntoViewIfNeeded();
+await page.waitForTimeout(200);
+const scopeBox = await page.locator(".scope-canvas").boundingBox();
+await page.mouse.move(scopeBox.x + scopeBox.width * 0.45, scopeBox.y + scopeBox.height * 0.5);
+await page.mouse.down();
+await page.mouse.move(scopeBox.x + scopeBox.width * 0.75, scopeBox.y + scopeBox.height * 0.5, { steps: 10 });
+await page.mouse.up();
+await page.waitForTimeout(150);
+
+const narrowed = await page.evaluate(() => ({
+  region: window.__spiceLab.scope.getRegion(),
+  label: document.querySelector(".measure-scope").textContent,
+  hasClear: !!document.querySelector(".measure-head button")
+}));
+check("dragging the plot narrows the measurement window", !!narrowed.region && narrowed.hasClear, narrowed.label);
+
+await page.click(".measure-head button");
+await page.waitForTimeout(150);
+const restored = await page.evaluate(() => ({
+  region: window.__spiceLab.scope.getRegion(),
+  rms: window.__spiceLab.scope.measurements().find((x) => x.name === "v(1)").rms
+}));
+check("clearing returns to the whole sweep", restored.region === null && near(restored.rms, RMS, 1e-6), `${restored.rms}`);
+
+// half-wave rectified sine: mean and RMS sit just under the ideal-diode values
+const rect2 = await page.evaluate(async () => {
+  document.getElementById("labSelect").value = "rectifier";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+  await window.__spiceLab.run();
+  return window.__spiceLab.scope.measurements().find((m) => m.name === "v(2)");
+});
+check("rectifier mean is just under Vp/π", rect2.mean < rect2.max / Math.PI && rect2.mean > rect2.max / Math.PI - 0.2,
+  `mean ${rect2.mean.toFixed(4)} vs ideal ${(rect2.max / Math.PI).toFixed(4)}`);
+check("rectifier RMS is just under Vp/2", rect2.rms < rect2.max / 2 && rect2.rms > rect2.max / 2 - 0.2,
+  `rms ${rect2.rms.toFixed(4)} vs ideal ${(rect2.max / 2).toFixed(4)}`);
+
+const acCols = await page.evaluate(async () => {
+  document.getElementById("labSelect").value = "rc-lowpass";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+  await window.__spiceLab.run();
+  return [...document.querySelectorAll("#measureHost thead th")].map((th) => th.textContent);
+});
+check("AC sweep drops the time-only columns", acCols.join(",") === "Trace,Min,Max,Pk-Pk", acCols.join(","));
+
 /* -------------------------------------------------------------- ammeter */
 
 console.log("\n— ammeter —");
@@ -227,6 +321,55 @@ check("ammeter reads positive from + to −", am.current > 0);
 check("ammeter drops no voltage", near(am.vIn - am.vOut, 0, 1e-12), `${am.vIn} V → ${am.vOut} V`);
 check("current probe narrows the plot to the ammeter", am.plotted.length === 1 && am.plotted[0] === "i(vam1)",
   am.plotted.join(","));
+
+/* --------------------------------------------------------------- op-amp */
+
+console.log("\n— op-amp supply rails —");
+const opamp = await page.evaluate(async () => {
+  document.getElementById("labSelect").value = "inverting-amp";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+  await window.__spiceLab.run();
+  const netlist = document.getElementById("netOut").value;
+  const linear = window.__spiceLab.scope.measurements();
+
+  const S = window.__spiceLab.store;
+  S.edit(() => { S.state.comps.find((c) => c.label === "V1").value = "SIN(0 2 1k)"; }, "t");
+  await window.__spiceLab.run();
+  const clipped = window.__spiceLab.scope.measurements();
+
+  S.edit(() => {
+    const u = S.state.comps.find((c) => c.label === "U1");
+    u.vpos = "5"; u.vneg = "-5";
+  }, "t");
+  await window.__spiceLab.run();
+  const tight = window.__spiceLab.scope.measurements();
+
+  return { netlist, linear, clipped, tight };
+});
+
+check("op-amp emits a clamped behavioural source",
+  /^BU1 3 0 V = max\(-15, min\(15, 200k\*\(0 - V\(2\)\)\)\)$/m.test(opamp.netlist),
+  opamp.netlist.split("\n").find((l) => l.startsWith("BU1")));
+check("a grounded input is written as 0, not V(0)", !opamp.netlist.includes("V(0)"));
+
+const gain = opamp.linear[1].max / opamp.linear[0].max;
+check("closed-loop gain matches Rf/Rin", near(gain, 10, 0.01), `measured ${gain.toFixed(4)}`);
+check("finite open-loop gain shows up as slight droop", gain < 10,
+  `${gain.toFixed(5)}, theory 10/(1+11/200k) = ${(10 / (1 + 11 / 200000)).toFixed(5)}`);
+
+check("overdriving clips exactly at the ±15 rails",
+  near(opamp.clipped[1].max, 15, 1e-3) && near(opamp.clipped[1].min, -15, 1e-3),
+  `${opamp.clipped[1].min.toFixed(4)} .. ${opamp.clipped[1].max.toFixed(4)} V`);
+check("narrowing the rails narrows the clipping",
+  near(opamp.tight[1].max, 5, 1e-3) && near(opamp.tight[1].min, -5, 1e-3),
+  `${opamp.tight[1].min.toFixed(4)} .. ${opamp.tight[1].max.toFixed(4)} V`);
+
+await page.click("#btnCheck");
+await page.waitForFunction(() => document.querySelectorAll("#checkResults .check-list li").length >= 2, null, { timeout: 60000 });
+const ampChecks = await page.$$eval("#checkResults .check-list li", (els) =>
+  els.map((e) => ({ pass: e.className.includes("pass"), text: e.textContent.replace(/\s+/g, " ").trim() })));
+check("lab detects the inversion", ampChecks[0].pass, ampChecks[0].text);
+check("lab detects clipping against whatever the rails are set to", ampChecks[1].pass, ampChecks[1].text);
 
 /* ---------------------------------------------------- save / open cycle */
 

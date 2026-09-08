@@ -208,6 +208,74 @@ export const LABS = [
       }
     ]
   }
+  ,{
+    id: "inverting-amp",
+    title: "Inverting amplifier and clipping",
+    summary: "Set the gain with two resistors, then drive the amplifier until the supply rails stop it.",
+    tasks: [
+      "Run it. The output should be ten times the input and upside down — check the measurement table under the plot.",
+      "Confirm that against Rf / Rin worked out by hand.",
+      "Change V1 to SIN(0 2 1k) and run again. The output cannot reach 20 V, so it flattens against the rails.",
+      "Set U1's rails to +5 and −5, re-run, and watch the clipping tighten."
+    ],
+    circuit: {
+      title: "Inverting amplifier",
+      analysis: { type: "tran", trStep: "20u", trStop: "4m", trUic: false },
+      comps: [
+        P("V", 140, 160, 90, { label: "V1", value: "SIN(0 0.5 1k)", ac: "" }),
+        P("R", 200, 160, 0, { label: "R1", value: "1k" }),
+        P("R", 360, 60, 0, { label: "R2", value: "10k" }),
+        P("OPAMP", 400, 140, 0, { label: "U1", gain: "200k", vpos: "15", vneg: "-15" }),
+        P("GND", 340, 120, 0, { label: "GND" }),
+        P("GND", 140, 300, 0, { label: "GND" })
+      ],
+      wires: [
+        W(140, 160, 200, 160),
+        W(260, 160, 400, 160),
+        W(300, 60, 360, 60), W(300, 60, 300, 160),
+        W(420, 60, 520, 60), W(520, 60, 520, 140), W(480, 140, 520, 140),
+        W(400, 120, 340, 120),
+        W(140, 220, 140, 300)
+      ],
+      seq: { R: 2, V: 1, U: 1 },
+      probes: [
+        { kind: "v", ref: "140,160", x: 140, y: 160 },
+        { kind: "v", ref: "480,140", x: 480, y: 140 }
+      ]
+    },
+    analysis: { type: "tran", trStep: "20u", trStop: "4m", trUic: false },
+    checks: [
+      {
+        label: "The output is inverted relative to the input",
+        test: (ctx) => {
+          const vin = ctx.trace(ctx.vname("R1", 0));
+          const vout = ctx.trace(ctx.vname("U1", 2));
+          if (!vin || !vout) return { pass: false, detail: "no data on the input or output node" };
+          let k = 0;
+          for (let i = 1; i < vin.values.length; i++) {
+            if (Math.abs(vin.values[i]) > Math.abs(vin.values[k])) k = i;
+          }
+          const a = vin.values[k], b = vout.values[k];
+          return { pass: a * b < 0, detail: `input ${formatEng(a, 3)} V while output ${formatEng(b, 3)} V` };
+        }
+      },
+      {
+        label: "The output is clipping at both supply rails",
+        test: (ctx) => {
+          const u = ctx.part("U1");
+          const vout = ctx.trace(ctx.vname("U1", 2));
+          if (!u || !vout) return { pass: false, detail: "U1 or its output is missing" };
+          const hi = ctx.value(u.vpos), lo = ctx.value(u.vneg);
+          const max = Math.max(...vout.values), min = Math.min(...vout.values);
+          const pass = Math.abs(max - hi) < 0.05 && Math.abs(min - lo) < 0.05;
+          return {
+            pass,
+            detail: `output runs ${formatEng(min, 4)} to ${formatEng(max, 4)} V against rails ${lo} and ${hi}`
+          };
+        }
+      }
+    ]
+  }
 ];
 
 /* -------------------------------------------------------------- checking */

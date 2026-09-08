@@ -72,7 +72,7 @@ Run this on the weakest device you actually support, not just your desk.
 
 **Schematic editor.** Fourteen parts: R, C, L, voltage and current sources,
 diodes with four models, a switch, an ammeter, ground, NPN and PNP transistors,
-N- and P-channel MOSFETs, and an ideal op-amp. Rotation in 90° steps, box select,
+N- and P-channel MOSFETs, and an op-amp with supply rails. Rotation in 90° steps, box select,
 shift-click, drag to move, undo/redo, copy/paste, arrow-key nudging, pan and
 zoom.
 
@@ -105,9 +105,29 @@ magnitude in dB or phase, a hover cursor reading every trace at that point, a
 clickable legend, and CSV export. Place probes to narrow the plot to the nodes
 you care about.
 
-**Labs.** Four guided labs — voltage divider, RC low-pass, half-wave rectifier,
-transistor bias — each with a starter circuit, tasks, and checks that run a real
-simulation and report against a tolerance.
+**Measurements.** Under every plot, a table gives min, max, peak-to-peak, mean,
+RMS, and frequency for each visible trace — the numbers lab worksheets actually
+ask for. Drag across the plot to measure a slice of it instead of the whole
+sweep, which is how you get steady-state figures without the startup transient
+dragging them off. Click once, or press the Whole sweep button, to go back.
+
+Columns follow the analysis: a DC sweep drops frequency and RMS, and an AC
+sweep reports only min, max and peak-to-peak of whatever quantity is displayed.
+
+ngspice picks its own timestep, so transient samples are **not** evenly spaced —
+in a 60 Hz test run the interval varied by 100× within a single sweep. Mean and
+RMS are therefore integrated over time with the trapezoid rule. Averaging over
+samples instead would over-weight whatever region the solver sampled densely:
+on that same run it put RMS out by 1.1e-2, where the time-weighted figure is
+within 3.6e-8 of Vp/√2.
+
+Statistics more than nine orders of magnitude below a trace's own amplitude are
+reported as zero, so the mean of a symmetric waveform reads `0 V` rather than
+`60.86p V`.
+
+**Labs.** Five guided labs — voltage divider, RC low-pass, half-wave rectifier,
+transistor bias, inverting amplifier — each with a starter circuit, tasks, and
+checks that run a real simulation and report against a tolerance.
 
 ## Layout
 
@@ -175,10 +195,39 @@ Append to `LABS` in `src/labs.js`. A lab is a starter circuit, a list of tasks,
 and checks that receive a context with `v(label, pin)`, `i(label)`,
 `trace(name)`, `part(label)`, and `value(str)` for parsing SPICE units.
 
+### The op-amp
+
+The op-amp is emitted as a behavioural source whose output is clamped between
+its rails:
+
+```
+BU1 3 0 V = max(-15, min(15, 200k*(0 - V(2))))
+```
+
+Set the open-loop gain and both rails on the part; use 0 for the negative rail
+in a single-supply circuit. Because the rails are real, an overdriven amplifier
+flattens against them instead of producing a physically impossible swing, and
+the finite open-loop gain shows up where it should — an inverting stage built
+from 1 kΩ and 10 kΩ measures 9.9995 rather than exactly 10, matching
+10 / (1 + 11/200k).
+
+Two notes for anyone extending this. ngspice's own `limit(x, lo, hi)` looks like
+the obvious way to write the clamp, but it is **broken in this build**: it
+silently returns the gain constant instead of a clamped value, with no error
+raised. `max(lo, min(hi, x))` works and clips exactly. A `tanh` soft clip also
+works and converges identically — including in a relaxation oscillator, where
+the positive feedback loop landed within 0.13% of 1/(2RC·ln3) — but it
+overshoots the rail slightly, so the hard clamp is what ships.
+
+`V(0)` is not a legal node reference, so a grounded input is written as a
+literal `0` in the expression.
+
 ## Known limits
 
-- The ideal op-amp is a voltage-controlled source with no supply rails, so it
-  will not clip. Real op-amp behaviour needs a `.subckt` model.
+- The op-amp has rails but no supply pins: they are fields on the part rather
+  than nodes you wire. It also has no slew-rate limit, no input offset, no
+  frequency compensation, and no output resistance. Those need a `.subckt` for
+  a specific device.
 - Current probes work on ammeters, voltage sources, and inductors, which is
   what ngspice exposes as `i(...)` without extra `.save` directives. To measure
   current anywhere else, drop an ammeter into the branch.

@@ -27,7 +27,7 @@ const canvas = createCanvas({
   onSelectionChange: () => { renderInspector(); renderPartsTable(lastNet()); }
 });
 
-const scope = createScope({ host: $("scopeHost"), onStatus: say });
+const scope = createScope({ host: $("scopeHost"), measureHost: $("measureHost"), onStatus: say });
 
 let currentLab = null;
 let lastResult = null;
@@ -54,7 +54,7 @@ function shortName(def) {
     Switch: "SW", Ammeter: "Ammeter", Ground: "GND",
     "NPN transistor": "NPN", "PNP transistor": "PNP",
     "N-channel MOSFET": "NMOS", "P-channel MOSFET": "PMOS",
-    "Op-amp (ideal)": "Op-amp"
+    "Op-amp": "Op-amp"
   };
   return map[def.name] || def.name;
 }
@@ -682,4 +682,4 @@ canvas.fit();
 setTool("select");
 
 // exposed for the end-to-end tests
-window.__spiceLab = { store, canvas, scope, run, refresh, getResult: () => lastResult };
+window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, getResult: () => lastResult };

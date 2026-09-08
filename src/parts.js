@@ -183,13 +183,35 @@ export const PARTS = {
     models: () => []
   },
 
+  /**
+   * Op-amp with supply rails. Emitted as a behavioural source whose output is
+   * clamped between the rails, so it saturates the way a real one does rather
+   * than producing impossible output swings.
+   *
+   * Clamping is `max(vneg, min(vpos, ...))`. ngspice's own limit() function
+   * looks like the obvious choice but is broken in this build: it silently
+   * returns the gain constant instead of a clamped value, with no error.
+   */
   OPAMP: {
-    key: "OPAMP", name: "Op-amp (ideal)", prefix: "E", shape: S.OPAMP,
+    key: "OPAMP", name: "Op-amp", prefix: "U", shape: S.OPAMP,
     pins: [[0, -20], [0, 20], [80, 0]], pinNames: ["in+", "in−", "out"],
     box: [-4, -38, 84, 38],
-    fields: [{ k: "gain", label: "Open-loop gain", def: "200k",
-               hint: "A voltage-controlled source referenced to ground. No supply rails, so it will not clip" }],
-    emit: (c, n) => [`${c.label} ${n[2]} 0 ${n[0]} ${n[1]} ${c.gain}`],
+    fields: [
+      { k: "gain", label: "Open-loop gain", def: "200k",
+        hint: "Differential gain before the rails take over" },
+      { k: "vpos", label: "Positive rail (V)", def: "15",
+        hint: "The output cannot rise above this" },
+      { k: "vneg", label: "Negative rail (V)", def: "-15",
+        hint: "The output cannot fall below this. Use 0 for a single-supply circuit" }
+    ],
+    emit: (c, n) => {
+      // V(0) is not a legal reference, so a grounded input is written as 0.
+      const at = (node) => (node === 0 ? "0" : `V(${node})`);
+      const diff = `${at(n[0])} - ${at(n[1])}`;
+      return [`B${c.label} ${n[2]} 0 V = max(${c.vneg}, min(${c.vpos}, ${c.gain}*(${diff})))`];
+    },
+    summary: (c) => `A=${c.gain}  ${c.vpos}/${c.vneg} V`,
+    netlistName: (c) => `B${c.label}`,
     models: () => []
   }
 };

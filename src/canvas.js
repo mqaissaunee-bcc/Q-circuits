@@ -208,6 +208,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
 
   function summarise(c) {
     const def = PARTS[c.type];
+    if (def.summary) return def.summary(c);
     const parts = [];
     def.fields.forEach((f) => {
       const v = c[f.k];
