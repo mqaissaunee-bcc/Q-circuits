@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spice Lab — schematic capture and simulation in the browser</title>
+<meta name="description" content="Draw a circuit and simulate it with ngspice compiled to WebAssembly. Everything runs in the browser; no circuit leaves the machine.">
+<link rel="stylesheet" href="./src/styles.css">
+</head>
+<body>
+<a class="skip-link" href="#sheet-region">Skip to the schematic</a>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="brand">
+      <h1>Spice Lab</h1>
+      <p class="tagline">ngspice in the browser</p>
+    </div>
+    <div class="doc-controls">
+      <label class="sr-only" for="docTitle">Circuit name</label>
+      <input type="text" id="docTitle" class="doc-title" autocomplete="off" spellcheck="false">
+      <button type="button" id="btnNew" class="ghost">New</button>
+      <button type="button" id="btnOpen" class="ghost">Open</button>
+      <button type="button" id="btnSave" class="ghost">Save</button>
+      <input type="file" id="fileInput" accept=".json,application/json" class="sr-only" tabindex="-1">
+    </div>
+  </div>
+</header>
+
+<div class="toolbar-strip">
+  <div class="toolbar-inner">
+    <div class="tool-group" id="modeTools" role="group" aria-label="Modes">
+      <button type="button" data-tool="select" aria-pressed="true">Select<kbd>S</kbd></button>
+      <button type="button" data-tool="wire" aria-pressed="false">Wire<kbd>W</kbd></button>
+      <button type="button" data-tool="probe" aria-pressed="false">Probe<kbd>B</kbd></button>
+    </div>
+    <div class="tool-group" id="partTools" role="group" aria-label="Parts"></div>
+    <div class="tool-group" role="group" aria-label="Edit">
+      <button type="button" id="btnUndo" class="ghost" disabled>Undo<kbd>⌘Z</kbd></button>
+      <button type="button" id="btnRedo" class="ghost" disabled>Redo</button>
+      <button type="button" id="btnRotate" class="ghost">Rotate<kbd>O</kbd></button>
+      <button type="button" id="btnDelete" class="ghost danger">Delete<kbd>⌫</kbd></button>
+    </div>
+    <div class="tool-group" role="group" aria-label="View">
+      <button type="button" id="btnZoomIn" class="ghost" aria-label="Zoom in">+</button>
+      <button type="button" id="btnZoomOut" class="ghost" aria-label="Zoom out">−</button>
+      <button type="button" id="btnFit" class="ghost">Fit</button>
+    </div>
+  </div>
+</div>
+
+<p class="sr-only" id="status" role="status" aria-live="polite"></p>
+
+<main class="workspace">
+
+  <section class="panel sheet-panel" id="sheet-region" aria-label="Schematic sheet">
+    <div class="sheet-host" id="sheetHost"></div>
+    <p class="hint-bar">
+      <span>Pick a part, then click the sheet to place it.</span>
+      <span>Drag on empty space to box-select.</span>
+      <span>Alt-drag or middle-drag to pan, scroll to zoom.</span>
+    </p>
+  </section>
+
+  <div class="side">
+
+    <section class="panel" aria-labelledby="labHead">
+      <h2 id="labHead">Lab</h2>
+      <div class="panel-body">
+        <div class="field">
+          <label for="labSelect">Open a guided lab</label>
+          <select id="labSelect">
+            <option value="">Free build</option>
+          </select>
+        </div>
+        <p class="muted" id="labSummary"></p>
+        <ol class="task-list" id="labTasks"></ol>
+        <div class="btn-row">
+          <button type="button" id="btnCheck" class="primary" disabled>Check my work</button>
+        </div>
+        <div id="checkResults"></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="selHead">
+      <h2 id="selHead">Selected part</h2>
+      <div class="panel-body" id="inspector">
+        <p class="muted">Nothing selected. Click a part on the sheet, or pick one from the parts table.</p>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="anaHead">
+      <h2 id="anaHead">Analysis</h2>
+      <div class="panel-body">
+        <div class="field">
+          <label for="anaType">What should ngspice run?</label>
+          <select id="anaType">
+            <option value="op">Operating point (.op)</option>
+            <option value="dc">DC sweep (.dc)</option>
+            <option value="tran">Transient (.tran)</option>
+            <option value="ac">AC sweep (.ac)</option>
+          </select>
+        </div>
+
+        <div id="fieldsDC" hidden>
+          <div class="field">
+            <label for="dcSrc">Source to sweep</label>
+            <input type="text" id="dcSrc" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field-grid-3">
+            <div class="field"><label for="dcStart">Start</label><input type="text" id="dcStart"></div>
+            <div class="field"><label for="dcStop">Stop</label><input type="text" id="dcStop"></div>
+            <div class="field"><label for="dcStep">Step</label><input type="text" id="dcStep"></div>
+          </div>
+        </div>
+
+        <div id="fieldsTran">
+          <div class="field-grid-2">
+            <div class="field"><label for="trStep">Time step</label><input type="text" id="trStep"></div>
+            <div class="field"><label for="trStop">Stop time</label><input type="text" id="trStop"></div>
+          </div>
+          <div class="checkline">
+            <input type="checkbox" id="trUic">
+            <label for="trUic">Start from the initial conditions (uic)</label>
+          </div>
+        </div>
+
+        <div id="fieldsAC" hidden>
+          <div class="field-grid-3">
+            <div class="field"><label for="acPts">Points/decade</label><input type="text" id="acPts"></div>
+            <div class="field"><label for="acStart">Start Hz</label><input type="text" id="acStart"></div>
+            <div class="field"><label for="acStop">Stop Hz</label><input type="text" id="acStop"></div>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button type="button" id="btnRun" class="primary">Run simulation</button>
+        </div>
+        <p class="muted" id="engineNote">The ngspice engine is about 20 MB and downloads once, on your first run.</p>
+        <div id="runError"></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel scope-panel" aria-labelledby="scopeHead">
+    <h2 id="scopeHead">
+      Waveforms
+      <span class="head-actions">
+        <span class="seg" id="acModes" role="group" aria-label="AC display" hidden>
+          <button type="button" data-mode="db" aria-pressed="true">Magnitude dB</button>
+          <button type="button" data-mode="mag" aria-pressed="false">Magnitude</button>
+          <button type="button" data-mode="phase" aria-pressed="false">Phase</button>
+        </span>
+        <button type="button" id="btnCsv" class="ghost" disabled>Export CSV</button>
+      </span>
+    </h2>
+    <div class="panel-body">
+      <div class="scope-host" id="scopeHost"></div>
+      <div id="opResults"></div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="netHead">
+    <h2 id="netHead">
+      Netlist
+      <span class="head-actions">
+        <button type="button" id="btnCopyNet" class="ghost">Copy</button>
+        <button type="button" id="btnCir" class="ghost">Download .cir</button>
+      </span>
+    </h2>
+    <div class="panel-body">
+      <label class="sr-only" for="netOut">Generated ngspice netlist</label>
+      <textarea id="netOut" rows="14" readonly spellcheck="false"></textarea>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="partsHead">
+    <h2 id="partsHead">Parts and connections</h2>
+    <div class="panel-body">
+      <table class="parts-table">
+        <caption>Text equivalent of the sheet. Node 0 is ground; the other numbers come from the connectivity pass.</caption>
+        <thead>
+          <tr>
+            <th scope="col">Part</th>
+            <th scope="col">Type</th>
+            <th scope="col">Nodes</th>
+            <th scope="col">Settings</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody id="partsBody"></tbody>
+      </table>
+      <div id="checks"></div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <p>
+    Runs ngspice compiled to WebAssembly through
+    <a href="https://github.com/eelab-dev/EEcircuit-engine" rel="noreferrer">eecircuit-engine</a>.
+    Circuits are simulated in this tab and never uploaded.
+    Built for Engineering &amp; Technology, Brookdale Community College.
+  </p>
+</footer>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

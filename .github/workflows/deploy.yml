@@ -1,0 +1,66 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: read the repo, mint the Pages deployment token, nothing else.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a run in progress finish rather than cancelling it mid-deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify the build
+        run: |
+          test -f dist/index.html || { echo "dist/index.html missing"; exit 1; }
+          test -f dist/.nojekyll || { echo "dist/.nojekyll missing"; exit 1; }
+          engine=$(find dist/assets -name 'ngspice-*.js' | head -1)
+          test -n "$engine" || { echo "ngspice chunk missing"; exit 1; }
+          size=$(stat -c%s "$engine")
+          echo "engine chunk: $((size / 1048576)) MB"
+          # GitHub blocks files over 100 MiB; warn well before that.
+          test "$size" -lt 52428800 || { echo "engine chunk exceeds 50 MiB"; exit 1; }
+          if grep -q 'src="/assets' dist/index.html; then
+            echo "absolute asset paths found: base must stay './' for a project site"
+            exit 1
+          fi
+          echo "build looks deployable"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
