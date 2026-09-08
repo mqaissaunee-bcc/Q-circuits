@@ -9,7 +9,10 @@
 
 import { makeComp } from "./parts.js";
 
-const STORAGE_KEY = "spice-lab-v1";
+const STORAGE_KEY = "q-circuits-v1";
+const LEGACY_STORAGE_KEY = "spice-lab-v1";     // autosave from before the rename
+const DOC_FORMAT = "q-circuits-circuit";
+const LEGACY_DOC_FORMATS = new Set([DOC_FORMAT, "spice-lab-circuit"]);
 const HISTORY_LIMIT = 60;
 
 export const DEFAULT_ANALYSIS = {
@@ -263,7 +266,7 @@ export class Store {
 
   restore() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY);
       if (!raw) return false;
       const parsed = JSON.parse(raw);
       if (!parsed?.state?.comps) return false;
@@ -278,7 +281,7 @@ export class Store {
   /** Serialise for a .circuit.json download. */
   toDocument() {
     return JSON.stringify({
-      format: "spice-lab-circuit",
+      format: DOC_FORMAT,
       version: 1,
       savedAt: new Date().toISOString(),
       ...this.state
@@ -287,7 +290,7 @@ export class Store {
 
   loadDocument(text) {
     const doc = JSON.parse(text);
-    if (doc.format !== "spice-lab-circuit") throw new Error("That file is not a Spice Lab circuit.");
+    if (!LEGACY_DOC_FORMATS.has(doc.format)) throw new Error("That file is not a Q Circuits circuit.");
     if (!Array.isArray(doc.comps)) throw new Error("That circuit file has no parts in it.");
     this.edit((s) => {
       s.title = doc.title || "Untitled circuit";

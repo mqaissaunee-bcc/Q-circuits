@@ -390,7 +390,7 @@ const rejects = await page.evaluate(() => {
   try { window.__spiceLab.store.loadDocument('{"format":"something-else"}'); return "accepted"; }
   catch (e) { return e.message; }
 });
-check("a foreign file is rejected with a readable message", rejects.includes("not a Spice Lab circuit"), rejects);
+check("a foreign file is rejected with a readable message", rejects.includes("not a Q Circuits circuit"), rejects);
 
 /* ------------------------------------------------------ error handling */
 

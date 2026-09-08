@@ -3,8 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Spice Lab — schematic capture and simulation in the browser</title>
+<title>Q Circuits — schematic capture and simulation in the browser</title>
 <meta name="description" content="Draw a circuit and simulate it with ngspice compiled to WebAssembly. Everything runs in the browser; no circuit leaves the machine.">
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="./src/styles.css">
 </head>
 <body>
@@ -13,7 +14,16 @@
 <header class="masthead">
   <div class="masthead-inner">
     <div class="brand">
-      <h1>Spice Lab</h1>
+      <!-- The gold dot sits where the tail meets the bowl: the same junction
+           glyph the schematic editor draws where conductors actually connect. -->
+      <svg class="brand-mark" viewBox="0 0 60 60" width="34" height="34" aria-hidden="true" focusable="false">
+        <g fill="none" stroke="currentColor" stroke-width="6.5" stroke-linecap="round">
+          <circle cx="30" cy="30" r="18"/>
+          <path d="M35.5 35.5 L46.5 46.5"/>
+        </g>
+        <circle cx="42.7" cy="42.7" r="4.2" fill="var(--probe)"/>
+      </svg>
+      <h1>Q Circuits</h1>
       <p class="tagline">ngspice in the browser</p>
     </div>
     <div class="doc-controls">
@@ -202,7 +212,7 @@
     Runs ngspice compiled to WebAssembly through
     <a href="https://github.com/eelab-dev/EEcircuit-engine" rel="noreferrer">eecircuit-engine</a>.
     Circuits are simulated in this tab and never uploaded.
-    Built for Engineering &amp; Technology, Brookdale Community College.
+    Q Circuits is built for Engineering &amp; Technology, Brookdale Community College.
   </p>
 </footer>
 

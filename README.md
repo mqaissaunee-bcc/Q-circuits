@@ -1,4 +1,4 @@
-# Spice Lab
+# Q Circuits
 
 Browser-based schematic capture and circuit simulation for electronics teaching.
 Draw a circuit, and it runs on real ngspice compiled to WebAssembly — no server,
