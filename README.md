@@ -70,9 +70,9 @@ Run this on the weakest device you actually support, not just your desk.
 
 ## What it does
 
-**Schematic editor.** Thirteen parts: R, C, L, voltage and current sources,
-diodes with four models, a switch, ground, NPN and PNP transistors, N- and
-P-channel MOSFETs, and an ideal op-amp. Rotation in 90° steps, box select,
+**Schematic editor.** Fourteen parts: R, C, L, voltage and current sources,
+diodes with four models, a switch, an ammeter, ground, NPN and PNP transistors,
+N- and P-channel MOSFETs, and an ideal op-amp. Rotation in 90° steps, box select,
 shift-click, drag to move, undo/redo, copy/paste, arrow-key nudging, pan and
 zoom.
 
@@ -86,6 +86,19 @@ emitted only for the parts that need them. Copy it or download a `.cir`.
 
 **Simulation.** Operating point, DC sweep, transient, and AC sweep, run by
 ngspice itself.
+
+**Measuring current.** ngspice only reports `i(...)` for voltage sources and
+inductors, so measuring current in an arbitrary branch normally means hand-
+inserting a zero-volt source as an ammeter. The **Ammeter** part does that for
+you: it draws as a meter, emits `V<label> n+ n- DC 0`, and is electrically a
+perfect wire. Drop it in a branch, switch to the Probe tool, and click it.
+
+The sign is worth pointing out to students, because it is the opposite of what
+they see on a source. An ammeter reads **positive when conventional current
+flows from its + pin to its − pin**, marked by the arrow on the symbol. A
+voltage source reads negative while delivering current, because ngspice defines
+source current as flowing from + to − *inside* the element. Same convention,
+opposite outcome — a decent five-minute discussion in its own right.
 
 **Waveforms.** Multi-trace plot with a log frequency axis for AC sweeps,
 magnitude in dB or phase, a hover cursor reading every trace at that point, a
@@ -166,9 +179,9 @@ and checks that receive a context with `v(label, pin)`, `i(label)`,
 
 - The ideal op-amp is a voltage-controlled source with no supply rails, so it
   will not clip. Real op-amp behaviour needs a `.subckt` model.
-- Current probes work on voltage sources and inductors, which is what ngspice
-  exposes as `i(...)` without extra `.save` directives. Current through a
-  resistor needs a 0 V source in series.
+- Current probes work on ammeters, voltage sources, and inductors, which is
+  what ngspice exposes as `i(...)` without extra `.save` directives. To measure
+  current anywhere else, drop an ammeter into the branch.
 - The switch is emitted as a resistor (1 mΩ closed, 1 GΩ open) named `R` +
   its label, so `SW1` appears in the netlist as `RSW1`.
 - MOSFET models are Level 1 and are for teaching behaviour, not device accuracy.

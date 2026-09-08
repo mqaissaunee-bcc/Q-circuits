@@ -190,6 +190,44 @@ await page.mouse.up();
 const selCount = await page.evaluate(() => window.__spiceLab.store.selection.size);
 check("box select grabs everything on the sheet", selCount > 4, `${selCount} items`);
 
+/* -------------------------------------------------------------- ammeter */
+
+console.log("\n— ammeter —");
+const am = await page.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  S.clear();
+  S.edit(() => {
+    const v  = S.addComp("V",  200, 180, "V");  v.rot = 90; v.value = "DC 10";
+    S.addComp("AM", 280, 180, "AM");
+    const r  = S.addComp("R",  460, 180, "R");  r.rot = 90; r.value = "1k";
+    S.addComp("GND", 200, 400, "GND");
+    S.addWire(200, 180, 280, 180);
+    S.addWire(340, 180, 460, 180);
+    S.addWire(460, 240, 460, 400);
+    S.addWire(460, 400, 200, 400);
+    S.addWire(200, 240, 200, 400);
+    S.state.analysis.type = "op";
+  }, "test");
+  const netlist = document.getElementById("netOut").value;
+  S.toggleProbe("i", "VAM1", {});
+  await window.__spiceLab.run();
+  const res = window.__spiceLab.getResult();
+  const t = (n) => res.traces.find((x) => x.name === n)?.values.at(-1);
+  return {
+    netlist,
+    current: t("i(vam1)"),
+    vIn: t("v(1)"), vOut: t("v(2)"),
+    plotted: [...document.querySelectorAll(".legend-name")].map((e) => e.textContent)
+  };
+});
+check("ammeter emits a zero-volt source", am.netlist.includes("VAM1 1 2 DC 0"),
+  am.netlist.split("\n").filter((l) => l && !l.startsWith("*")).join(" | "));
+check("ammeter measures 10 mA through 1k from 10 V", near(am.current, 0.01, 1e-9), `i(vam1) = ${am.current}`);
+check("ammeter reads positive from + to −", am.current > 0);
+check("ammeter drops no voltage", near(am.vIn - am.vOut, 0, 1e-12), `${am.vIn} V → ${am.vOut} V`);
+check("current probe narrows the plot to the ammeter", am.plotted.length === 1 && am.plotted[0] === "i(vam1)",
+  am.plotted.join(","));
+
 /* ---------------------------------------------------- save / open cycle */
 
 console.log("\n— documents —");

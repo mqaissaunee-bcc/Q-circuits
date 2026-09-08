@@ -246,9 +246,11 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
       } else {
         const c = store.state.comps.find((k) => netlistNameOf(k) === pr.ref);
         if (!c) return;
-        const b = boxOf(c, 0);
-        const t = el("text", { x: (b.x0 + b.x1) / 2, y: (b.y0 + b.y1) / 2 + 4, class: "probe-current" }, g);
-        t.textContent = "A";
+        const b = boxOf(c, 6);
+        el("rect", { x: b.x0, y: b.y0, width: b.x1 - b.x0, height: b.y1 - b.y0, class: "probe-box", rx: 3 }, g);
+        // above the part's own label, so it never lands on the wire it measures
+        const t = el("text", { x: (b.x0 + b.x1) / 2, y: b.y0 - 14, class: "probe-label", "text-anchor": "middle" }, g);
+        t.textContent = probeName(pr);
       }
     });
   }
@@ -328,11 +330,11 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
       } else {
         const hit = hitAt(p);
         const c = hit?.kind === "comp" ? store.comp(hit.id) : null;
-        if (c && (c.type === "V" || c.type === "L")) {
+        if (c && (c.type === "V" || c.type === "L" || c.type === "AM")) {
           const added = store.toggleProbe("i", netlistNameOf(c), {});
           say(added ? `Current probe added on ${c.label}.` : "Current probe removed.");
         } else {
-          say("Click a wire or a pin for a voltage probe, or a voltage source or inductor for a current probe.");
+          say("Click a wire or a pin for a voltage probe, or an ammeter, voltage source or inductor for a current probe.");
         }
       }
       render();

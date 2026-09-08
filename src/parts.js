@@ -49,11 +49,13 @@ const S = {
          "M24 -13 H40 V-40", "M24 13 H40 V40", "M24 0H40", "M40 0V13",
          "M37 0 L32 -3.5 L32 3.5 Z"],
   OPAMP: ["M0 -20H20", "M0 20H20", "M20 -34 L20 34 L64 0 Z", "M64 0H80",
-          "M25 -20H31", "M28 -23V-17", "M25 20H31"]
+          "M25 -20H31", "M28 -23V-17", "M25 20H31"],
+  AM: ["M0 0H19", "M41 0H60", "M19 0 a11 11 0 1 0 22 0 a11 11 0 1 0 -22 0",
+       "M25.5 5 L30 -6 L34.5 5", "M27.2 1.5 H32.8", "M46 -3.5 L51.5 0 L46 3.5 Z"]
 };
 
 /** Shapes whose closed subpaths should be filled rather than stroked. */
-const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9] };
+const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5] };
 
 /* ------------------------------------------------------------------- parts */
 
@@ -164,6 +166,23 @@ export const PARTS = {
     models: (c) => [c.model]
   },
 
+  /**
+   * Ammeter. ngspice only reports i(...) for voltage sources and inductors, so
+   * measuring current anywhere else means putting a zero-volt source in the
+   * branch. This wraps that trick in a part: it emits `V<label> n+ n- DC 0`,
+   * which is a perfect wire electrically and an ammeter as far as the results
+   * are concerned. Reads positive when conventional current flows from + to −.
+   */
+  AM: {
+    key: "AM", name: "Ammeter", prefix: "AM", shape: S.AM,
+    pins: [[0, 0], [60, 0]], pinNames: ["+", "−"],
+    box: [-4, -16, 64, 16],
+    fields: [],
+    emit: (c, n) => [`V${c.label} ${n[0]} ${n[1]} DC 0`],
+    netlistName: (c) => `V${c.label}`,
+    models: () => []
+  },
+
   OPAMP: {
     key: "OPAMP", name: "Op-amp (ideal)", prefix: "E", shape: S.OPAMP,
     pins: [[0, -20], [0, 20], [80, 0]], pinNames: ["in+", "in−", "out"],
@@ -176,7 +195,7 @@ export const PARTS = {
 };
 
 /** Order the palette is presented in. */
-export const PALETTE = ["R", "C", "L", "V", "I", "D", "SW", "GND", "NPN", "PNP", "NMOS", "PMOS", "OPAMP"];
+export const PALETTE = ["R", "C", "L", "V", "I", "D", "SW", "AM", "GND", "NPN", "PNP", "NMOS", "PMOS", "OPAMP"];
 
 /* --------------------------------------------------------------- geometry */
 

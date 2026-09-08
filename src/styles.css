@@ -244,10 +244,7 @@ svg.sheet:focus-visible { outline-offset: -3px; }
 .probe { fill: none; stroke: var(--probe); stroke-width: 2.5; }
 .probe-ghost { opacity: .5; }
 .probe-label { font-family: var(--mono); font-size: 10px; fill: var(--probe); }
-.probe-current {
-  font-family: var(--mono); font-size: 11px; font-weight: 600;
-  fill: var(--probe); text-anchor: middle;
-}
+.probe-box { fill: none; stroke: var(--probe); stroke-width: 2; stroke-dasharray: 2 3; }
 
 .hint-bar {
   display: flex; flex-wrap: wrap; gap: var(--sp-4);
