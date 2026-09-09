@@ -204,8 +204,8 @@ document.addEventListener("keydown", (evt) => {
     const d = 20;
     const map = { ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, -d], ArrowDown: [0, d] };
     const [dx, dy] = map[evt.key];
-    store.moveSelection(dx, dy);
-    say("Selection moved.");
+    store.moveSelection(dx, dy, { detach: evt.shiftKey });
+    say(evt.shiftKey ? "Selection moved, wires left in place." : "Selection moved.");
   }
 });
 

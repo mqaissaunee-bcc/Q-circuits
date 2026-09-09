@@ -437,6 +437,33 @@ check("a selected wire moves whole instead of stretching",
   detached.dy1 === 40 && detached.dy2 === 40, JSON.stringify(detached));
 await page.evaluate(() => window.__spiceLab.store.undo());
 
+// Shift-drag slides a part without disturbing the wiring
+const slid = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  const r1 = S.state.comps.find((c) => c.label === "R1");
+  const wiresBefore = JSON.parse(JSON.stringify(S.state.wires));
+  S.selection = new Set([r1.id]);
+  S.moveSelection(-80, 0, { detach: true });
+  window.__spiceLab.refresh();
+  return {
+    wiresUnchanged: JSON.stringify(wiresBefore) === JSON.stringify(S.state.wires),
+    wireCount: S.state.wires.length,
+    netlist: document.getElementById("netOut").value,
+    warnings: [...document.querySelectorAll("#checks li")].map((li) => li.textContent.trim())
+  };
+});
+check("shift-move leaves every wire exactly where it was", slid.wiresUnchanged);
+check("shift-move adds no elbow segments", slid.wireCount === 5, `${slid.wireCount} wires`);
+// Sliding along a wire keeps the pin sitting on it connected — the top pin
+// stays on node 1 — but a pin that leaves its wire genuinely comes off, and
+// that has to be visible rather than silent.
+check("a pin still sitting on a wire keeps its node", /R1 1 /.test(slid.netlist),
+  slid.netlist.split("\n").filter((l) => l && !l.startsWith("*")).join(" | "));
+check("a pin pulled off its wire is reported as dangling",
+  slid.warnings.filter((w) => w.includes("only one pin")).length === 2,
+  slid.warnings.join(" / ").slice(0, 120));
+await page.evaluate(() => window.__spiceLab.store.undo());
+
 // Alt-drag leaves a copy behind
 await page.evaluate(() => {
   const S = window.__spiceLab.store;

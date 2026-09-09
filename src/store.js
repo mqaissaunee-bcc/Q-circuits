@@ -306,13 +306,13 @@ export class Store {
     });
   }
 
-  moveSelection(dx, dy) {
+  moveSelection(dx, dy, { detach = false } = {}) {
     const comps = this.selectedComps();
     const wires = this.selectedWires();
     const notes = this.selectedNotes();
     if (!comps.length && !wires.length && !notes.length) return false;
     // Work out what is attached before anything moves.
-    const attached = this.attachedWireEnds(comps);
+    const attached = detach ? [] : this.attachedWireEnds(comps);
     this.edit(() => {
       comps.forEach((c) => { c.x += dx; c.y += dy; });
       wires.forEach((w) => { w.x1 += dx; w.y1 += dy; w.x2 += dx; w.y2 += dy; });

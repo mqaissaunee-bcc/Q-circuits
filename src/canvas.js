@@ -550,10 +550,13 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       return;
     }
 
-    if (evt.shiftKey) {
-      if (store.selection.has(hit.id)) store.selection.delete(hit.id);
-      else store.selection.add(hit.id);
-    } else if (!store.selection.has(hit.id)) {
+    // Shift on something already selected starts a detached move rather than
+    // toggling it out of the selection; the toggle still happens if the
+    // pointer never moves, so shift-click keeps working.
+    const shiftOnSelected = evt.shiftKey && store.selection.has(hit.id);
+    if (evt.shiftKey && !shiftOnSelected) {
+      store.selection.add(hit.id);
+    } else if (!evt.shiftKey && !store.selection.has(hit.id)) {
       store.selection = new Set([hit.id]);
     }
     onSelectionChange?.();
@@ -570,11 +573,19 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       }
     }
 
+    // Shift detaches: the parts move and every wire stays exactly where it is.
+    // Useful for sliding a part along a bus without disturbing the run, which
+    // still leaves it connected because connectivity is decided by geometry.
+    const detach = evt.shiftKey;
+    if (detach) say("Moving without dragging the wires.");
+
     store.begin();
     gesture = {
       mode: "move",
       duplicating,
-      attached: store.attachedWireEnds(store.selectedComps()).map((a) => ({
+      detach,
+      pendingToggle: shiftOnSelected ? hit.id : null,
+      attached: (detach ? [] : store.attachedWireEnds(store.selectedComps())).map((a) => ({
         ...a,
         x: a.end === 1 ? a.wire.x1 : a.wire.x2,
         y: a.end === 1 ? a.wire.y1 : a.wire.y2
@@ -696,7 +707,14 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     if (gesture.mode === "move") {
       if (gesture.moved) store.squareUpAttached(gesture.attached);
       if (gesture.moved || gesture.duplicating) store.commit("move");
-      else store.pendingSnapshot = null;
+      else {
+        store.pendingSnapshot = null;
+        // A shift-click that never turned into a drag is still a toggle.
+        if (gesture.pendingToggle !== null) {
+          store.selection.delete(gesture.pendingToggle);
+          onSelectionChange?.();
+        }
+      }
     }
 
     gesture = null;

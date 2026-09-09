@@ -75,6 +75,15 @@ of its pins travels with it. On release each stretched wire is bent into an
 elbow along its original axis, so the schematic never ends up full of diagonals.
 A wire that is itself selected moves whole instead of stretching.
 
+**Move versus drag.** A plain drag keeps the wiring: attached ends follow and
+stretch. **Shift-drag moves the part and leaves every wire exactly where it
+is** — the way KiCad's Move differs from its Drag. Because connectivity is
+decided by geometry, a part slid along a wire stays connected to it, which
+makes Shift-drag the right gesture for adjusting spacing along a bus without
+disturbing the run. A pin that leaves its wire really does come off; the
+validator flags it as a dangling node rather than letting it pass quietly.
+Shift plus the arrow keys does the same thing.
+
 **Wire editing.** Select a wire and drag either end to reroute it. Ends resting
 on a pin are left alone, so grabbing near a part moves the part rather than
 pulling the wire off it. Dragging an end onto its other end removes the wire.
