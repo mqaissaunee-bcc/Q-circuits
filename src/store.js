@@ -31,7 +31,8 @@ export class Store {
       wires: [],
       seq: {},
       analysis: { ...DEFAULT_ANALYSIS },
-      probes: []           // [{kind:'v'|'i', node, label}]
+      probes: [],          // [{kind:'v'|'i', node, label}]
+      notes: []            // free text on the sheet; never reaches the netlist
     };
     this.selection = new Set();   // ids of comps and wires
     this.uid = 1;
@@ -131,12 +132,16 @@ export class Store {
 
   comp(id) { return this.state.comps.find((c) => c.id === id) || null; }
   wire(id) { return this.state.wires.find((w) => w.id === id) || null; }
+  note(id) { return this.state.notes.find((n) => n.id === id) || null; }
 
   selectedComps() {
     return this.state.comps.filter((c) => this.selection.has(c.id));
   }
   selectedWires() {
     return this.state.wires.filter((w) => this.selection.has(w.id));
+  }
+  selectedNotes() {
+    return this.state.notes.filter((n) => this.selection.has(n.id));
   }
 
   /* ----------------------------------------------------------- mutations */
@@ -158,6 +163,12 @@ export class Store {
     return c;
   }
 
+  addNote(x, y, text = "") {
+    const n = { id: this.uid++, x, y, text };
+    this.state.notes.push(n);
+    return n;
+  }
+
   addWire(x1, y1, x2, y2) {
     const w = { id: this.uid++, x1, y1, x2, y2 };
     this.state.wires.push(w);
@@ -170,6 +181,7 @@ export class Store {
     this.edit((s) => {
       s.comps = s.comps.filter((c) => !this.selection.has(c.id));
       s.wires = s.wires.filter((w) => !this.selection.has(w.id));
+      s.notes = s.notes.filter((n) => !this.selection.has(n.id));
     }, "delete");
     this.selection.clear();
     return n;
@@ -178,9 +190,10 @@ export class Store {
   copySelection() {
     const comps = this.selectedComps();
     const wires = this.selectedWires();
-    if (!comps.length && !wires.length) return 0;
-    this.clipboard = JSON.parse(JSON.stringify({ comps, wires }));
-    return comps.length + wires.length;
+    const notes = this.selectedNotes();
+    if (!comps.length && !wires.length && !notes.length) return 0;
+    this.clipboard = JSON.parse(JSON.stringify({ comps, wires, notes }));
+    return comps.length + wires.length + notes.length;
   }
 
   cutSelection() {
@@ -210,6 +223,11 @@ export class Store {
         s.wires.push(w);
         added.push(w.id);
       });
+      (this.clipboard.notes || []).forEach((src) => {
+        const n = { id: this.uid++, x: src.x + dx, y: src.y + dy, text: src.text };
+        s.notes.push(n);
+        added.push(n.id);
+      });
     }, "paste");
     this.selection = new Set(added);
     return added.length;
@@ -236,6 +254,12 @@ export class Store {
         const b = { x: cx - (w.y2 - cy), y: cy + (w.x2 - cx) };
         w.x1 = a.x; w.y1 = a.y; w.x2 = b.x; w.y2 = b.y;
       });
+      // Annotations move with the group but stay upright: sideways text helps
+      // nobody.
+      this.selectedNotes().forEach((n) => {
+        const x = cx - (n.y - cy), y = cy + (n.x - cx);
+        n.x = x; n.y = y;
+      });
     }, "rotate");
     return true;
   }
@@ -243,17 +267,19 @@ export class Store {
   moveSelection(dx, dy) {
     const comps = this.selectedComps();
     const wires = this.selectedWires();
-    if (!comps.length && !wires.length) return false;
+    const notes = this.selectedNotes();
+    if (!comps.length && !wires.length && !notes.length) return false;
     this.edit(() => {
       comps.forEach((c) => { c.x += dx; c.y += dy; });
       wires.forEach((w) => { w.x1 += dx; w.y1 += dy; w.x2 += dx; w.y2 += dy; });
+      notes.forEach((n) => { n.x += dx; n.y += dy; });
     }, "move");
     return true;
   }
 
   clear() {
     this.edit((s) => {
-      s.comps = []; s.wires = []; s.seq = {}; s.probes = [];
+      s.comps = []; s.wires = []; s.seq = {}; s.probes = []; s.notes = [];
       s.title = "Untitled circuit";
     }, "clear");
     this.selection.clear();
@@ -346,6 +372,7 @@ export class Store {
       this.state = { ...this.state, ...parsed.state };
       this.state.analysis = { ...DEFAULT_ANALYSIS, ...(parsed.state.analysis || {}) };
       this.state.probes = parsed.state.probes || [];
+      this.state.notes = parsed.state.notes || [];
       this.uid = parsed.uid || 1;
       this.markClean();
       return true;
@@ -372,11 +399,13 @@ export class Store {
       s.wires = doc.wires || [];
       s.seq = doc.seq || {};
       s.probes = doc.probes || [];
+      s.notes = doc.notes || [];
       s.analysis = { ...DEFAULT_ANALYSIS, ...(doc.analysis || {}) };
     }, "open");
     this.selection.clear();
     this.uid = Math.max(0, ...this.state.comps.map((c) => c.id || 0),
-                           ...this.state.wires.map((w) => w.id || 0)) + 1;
+                           ...this.state.wires.map((w) => w.id || 0),
+                           ...this.state.notes.map((n) => n.id || 0)) + 1;
     this.markClean();
   }
 
@@ -388,6 +417,7 @@ export class Store {
       s.wires = (circuit.wires || []).map((w) => ({ ...w, id: this.uid++ }));
       s.seq = { ...(circuit.seq || {}) };
       s.probes = circuit.probes ? JSON.parse(JSON.stringify(circuit.probes)) : [];
+      s.notes = (circuit.notes || []).map((n) => ({ ...n, id: this.uid++ }));
       s.analysis = { ...DEFAULT_ANALYSIS, ...(circuit.analysis || {}) };
     }, "load");
     this.selection.clear();

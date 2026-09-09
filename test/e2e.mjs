@@ -386,6 +386,113 @@ const ampChecks = await page.$$eval("#checkResults .check-list li", (els) =>
 check("lab detects the inversion", ampChecks[0].pass, ampChecks[0].text);
 check("lab detects clipping against whatever the rails are set to", ampChecks[1].pass, ampChecks[1].text);
 
+/* ------------------------------------------------- pan, zoom area, text */
+
+console.log("\n— navigation and annotation tools —");
+await page.evaluate(() => {
+  document.getElementById("labSelect").value = "divider";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+});
+await page.waitForTimeout(200);
+const navBox = await boxOf(page, "svg.sheet");
+
+const viewOf = () => page.evaluate(() => {
+  const vb = document.querySelector("svg.sheet").getAttribute("viewBox").split(" ").map(Number);
+  return { x: vb[0], y: vb[1], w: vb[2], h: vb[3] };
+});
+
+// --- hand tool drags the view without touching the circuit
+await page.click('#viewTools button[data-tool="pan"]');
+const beforePan = await viewOf();
+const partsBeforePan = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
+await page.mouse.move(navBox.x + navBox.width * 0.5, navBox.y + navBox.height * 0.5);
+await page.mouse.down();
+await page.mouse.move(navBox.x + navBox.width * 0.5 - 160, navBox.y + navBox.height * 0.5 - 90, { steps: 10 });
+await page.mouse.up();
+await page.waitForTimeout(150);
+const afterPan = await viewOf();
+check("the hand tool moves the view", Math.abs(afterPan.x - beforePan.x) > 20,
+  `x ${beforePan.x.toFixed(0)} → ${afterPan.x.toFixed(0)}`);
+check("panning does not resize the view", Math.abs(afterPan.w - beforePan.w) < 1);
+check("panning changes nothing on the sheet",
+  (await page.evaluate(() => window.__spiceLab.store.state.comps.length)) === partsBeforePan);
+check("panning is not undoable clutter", !(await page.evaluate(() => window.__spiceLab.store.canUndo() &&
+  window.__spiceLab.store.state.comps.length !== 4)));
+
+// --- zoom area frames the dragged rectangle
+await page.click('#viewTools button[data-tool="zoomrect"]');
+const beforeZoom = await viewOf();
+await page.mouse.move(navBox.x + navBox.width * 0.3, navBox.y + navBox.height * 0.3);
+await page.mouse.down();
+await page.mouse.move(navBox.x + navBox.width * 0.6, navBox.y + navBox.height * 0.65, { steps: 10 });
+await page.mouse.up();
+await page.waitForTimeout(150);
+const afterZoom = await viewOf();
+check("dragging with the zoom tool zooms in", afterZoom.w < beforeZoom.w * 0.8,
+  `width ${beforeZoom.w.toFixed(0)} → ${afterZoom.w.toFixed(0)}`);
+check("the zoomed view keeps the sheet's aspect ratio",
+  Math.abs(afterZoom.w / afterZoom.h - 1400 / 900) < 0.01,
+  (afterZoom.w / afterZoom.h).toFixed(4));
+check("zooming leaves the circuit untouched",
+  (await page.evaluate(() => window.__spiceLab.store.state.comps.length)) === 4);
+
+await page.click("#btnFit");
+await page.waitForTimeout(150);
+
+// --- text tool places an annotation and opens an editor straight away
+await page.click('#modeTools button[data-tool="text"]');
+const textBox = await boxOf(page, "svg.sheet");
+await page.mouse.click(textBox.x + textBox.width * 0.6, textBox.y + textBox.height * 0.3);
+await page.waitForTimeout(200);
+const noteEditor = await page.evaluate(() => ({
+  editorOpen: !!document.querySelector(".inline-edit"),
+  notes: window.__spiceLab.store.state.notes.length
+}));
+check("the text tool places an annotation and opens an editor", noteEditor.editorOpen && noteEditor.notes === 1,
+  JSON.stringify(noteEditor));
+
+await page.keyboard.type("Divider output taken here");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(200);
+const noteSaved = await page.evaluate(() => ({
+  notes: window.__spiceLab.store.state.notes.map((n) => n.text),
+  onSheet: [...document.querySelectorAll('svg.sheet [data-edit="note"]')].map((n) => n.textContent),
+  netlist: document.getElementById("netOut").value
+}));
+check("the annotation text is stored", noteSaved.notes[0] === "Divider output taken here", noteSaved.notes.join("|"));
+check("the annotation is drawn on the sheet", noteSaved.onSheet.includes("Divider output taken here"));
+check("annotations never reach the netlist", !noteSaved.netlist.includes("Divider"),
+  noteSaved.netlist.split("\n").filter((l) => l && !l.startsWith("*")).join(" | "));
+check("annotations do not become circuit nodes",
+  !(await page.textContent("#checks")).includes("only one pin"));
+
+// an annotation left empty removes itself
+await page.click('#modeTools button[data-tool="text"]');
+const emptyBox = await boxOf(page, "svg.sheet");
+await page.mouse.click(emptyBox.x + emptyBox.width * 0.3, emptyBox.y + emptyBox.height * 0.75);
+await page.waitForTimeout(200);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(200);
+check("an annotation left blank removes itself",
+  (await page.evaluate(() => window.__spiceLab.store.state.notes.length)) === 1);
+
+// annotations survive a save and a link
+const notesRoundTrip = await page.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  const doc = S.toDocument();
+  const url = await window.__spiceLab.shareUrl(S.state);
+  const viaLink = await window.__spiceLab.decodeCircuit(new URL(url).hash);
+  S.clear();
+  S.loadDocument(doc);
+  return { viaFile: S.state.notes.map((n) => n.text), viaLink: viaLink.notes.map((n) => n.text) };
+});
+check("annotations survive save and open", notesRoundTrip.viaFile[0] === "Divider output taken here",
+  notesRoundTrip.viaFile.join("|"));
+check("annotations survive a shared link", notesRoundTrip.viaLink[0] === "Divider output taken here",
+  notesRoundTrip.viaLink.join("|"));
+
+await page.click('#modeTools button[data-tool="select"]');
+
 /* --------------------------------------------------------- inline editing */
 
 console.log("\n— inline editing —");

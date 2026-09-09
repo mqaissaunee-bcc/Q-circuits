@@ -70,6 +70,16 @@ Run this on the weakest device you actually support, not just your desk.
 
 ## What it does
 
+**Navigation.** A hand tool for dragging the view and a zoom-area tool for
+framing a rectangle, alongside the existing Alt-drag pan, scroll zoom, and Fit.
+Dragging with the zoom tool frames that region; clicking with it steps in.
+
+**Annotations.** A text tool for putting notes on the sheet — what a stage does,
+what to measure, a formula worth remembering. Annotations are selected, moved,
+copied, and deleted like anything else, and they travel through saves, links,
+and PNG exports. They never reach the netlist, so they cannot create a node or
+a dangling-connection warning.
+
 **Schematic editor.** Fourteen parts: R, C, L, voltage and current sources,
 diodes with four models, a switch, an ammeter, ground, NPN and PNP transistors,
 N- and P-channel MOSFETs, and an op-amp with supply rails. Rotation in 90° steps, box select,
@@ -215,6 +225,11 @@ undo attracts. Drag gestures apply live and commit once, on release.
 numbering falls out of the drawing and shifts the moment a student rewires
 anything. `ctx.v("R2", 0)` asks for the voltage on pin 0 of R2 and survives a
 rewire; asking for node 2 does not.
+
+**Fit and export measure the rendered sheet, not the model.** Annotation text
+has no geometric bounds — its extent depends on the font — so both frame the
+sheet from `getBBox` on the rendered groups. Computing bounds from the model
+instead crops long notes and any label sitting outside its symbol.
 
 **PNG export copies computed styles rather than restating the stylesheet.** The
 schematic is SVG styled by an external sheet, so a serialised clone comes out

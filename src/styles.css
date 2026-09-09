@@ -238,6 +238,10 @@ svg.sheet {
 }
 svg.sheet.mode-select { cursor: default; }
 svg.sheet.mode-probe { cursor: pointer; }
+svg.sheet.mode-pan { cursor: grab; }
+svg.sheet.mode-pan:active { cursor: grabbing; }
+svg.sheet.mode-zoom { cursor: zoom-in; }
+svg.sheet.mode-text { cursor: text; }
 svg.sheet:focus-visible { outline-offset: -3px; }
 
 .grid-dot { fill: var(--grid-dot); }
@@ -253,6 +257,12 @@ svg.sheet:focus-visible { outline-offset: -3px; }
 .part-label { font-family: var(--mono); font-size: 12px; fill: var(--ink); }
 .part-value { font-family: var(--mono); font-size: 11px; fill: var(--ink-soft); }
 .node-tag { font-family: var(--mono); font-size: 11px; fill: var(--accent); }
+.note {
+  font-family: var(--sans);
+  font-size: 12.5px;
+  fill: var(--ink-soft);
+}
+.note.is-selected { fill: var(--probe); }
 .sel-box { fill: none; stroke: var(--probe); stroke-width: 1.5; stroke-dasharray: 5 4; }
 .band { fill: var(--accent-soft); fill-opacity: .5; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; }
 .preview { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 4 4; fill: none; }

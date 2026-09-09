@@ -47,6 +47,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   let net = null;          // last connectivity result, for probe hit tests
   let editing = null;      // the inline <input>, when one is open
   let lastDown = null;     // for detecting a double-click ourselves
+  const noteBoxes = new Map();  // note id -> measured bounds, for hit testing
 
   const say = (m) => onStatus?.(m);
 
@@ -82,8 +83,8 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
    * the geometric bounds cover only the symbols, and text sits outside them.
    */
   function contentBox(pad = 26) {
-    const { comps, wires } = store.state;
-    if (!comps.length && !wires.length) return { x: 0, y: 0, w: SHEET_W, h: SHEET_H };
+    const { comps, wires, notes } = store.state;
+    if (!comps.length && !wires.length && !notes.length) return { x: 0, y: 0, w: SHEET_W, h: SHEET_H };
 
     try {
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, seen = false;
@@ -109,34 +110,52 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       x0 = Math.min(x0, w.x1 - pad, w.x2 - pad); y0 = Math.min(y0, w.y1 - pad, w.y2 - pad);
       x1 = Math.max(x1, w.x1 + pad, w.x2 + pad); y1 = Math.max(y1, w.y1 + pad, w.y2 + pad);
     });
+    store.state.notes.forEach((n) => {
+      const width = (n.text || "").length * 7;
+      x0 = Math.min(x0, n.x - pad); y0 = Math.min(y0, n.y - 14 - pad);
+      x1 = Math.max(x1, n.x + width + pad); y1 = Math.max(y1, n.y + pad);
+    });
     return { x: x0, y: y0, w: Math.max(80, x1 - x0), h: Math.max(80, y1 - y0) };
   }
 
-  function fit() {
-    const { comps, wires } = store.state;
-    if (!comps.length && !wires.length) {
-      view = { x: 0, y: 0, w: SHEET_W, h: SHEET_H };
-      applyView(); render(); return;
-    }
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    comps.forEach((c) => {
-      const b = boxOf(c, 30);
-      x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0);
-      x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1);
-    });
-    wires.forEach((w) => {
-      x0 = Math.min(x0, w.x1 - 30, w.x2 - 30); y0 = Math.min(y0, w.y1 - 30, w.y2 - 30);
-      x1 = Math.max(x1, w.x1 + 30, w.x2 + 30); y1 = Math.max(y1, w.y1 + 30, w.y2 + 30);
-    });
+  /** Frame a dragged rectangle, widened to the sheet's aspect ratio. */
+  function zoomToRect(r) {
     const ratio = SHEET_H / SHEET_W;
-    let w = Math.max(x1 - x0, (y1 - y0) / ratio, 300);
-    view = { x: (x0 + x1) / 2 - w / 2, y: (y0 + y1) / 2 - (w * ratio) / 2, w, h: w * ratio };
-    applyView(); render();
+    const w = Math.max(r.w, r.h / ratio, 80);
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    view = { x: cx - w / 2, y: cy - (w * ratio) / 2, w, h: w * ratio };
+    applyView();
+    render();
   }
+
+  function fit() {
+    // Measure after a render so annotation text, which has no geometric
+    // bounds of its own, is included rather than cropped.
+    render();
+    const b = contentBox();
+    const ratio = SHEET_H / SHEET_W;
+    const w = Math.max(b.w, b.h / ratio, 300);
+    view = {
+      x: b.x + b.w / 2 - w / 2,
+      y: b.y + b.h / 2 - (w * ratio) / 2,
+      w,
+      h: w * ratio
+    };
+    applyView();
+    render();
+  }
+
 
   /* ------------------------------------------------------------ hit test */
 
   function hitAt(p) {
+    for (let i = store.state.notes.length - 1; i >= 0; i--) {
+      const n = store.state.notes[i];
+      const b = noteBoxes.get(n.id);
+      if (b && p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1) {
+        return { kind: "note", id: n.id };
+      }
+    }
     const comps = store.state.comps;
     for (let i = comps.length - 1; i >= 0; i--) {
       const b = boxOf(comps[i], 4);
@@ -180,6 +199,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     drawJunctions();
     drawComps();
     drawNodeTags();
+    drawNotes();
     drawProbes();
     drawSelection();
     drawGhosts();
@@ -280,6 +300,31 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     });
   }
 
+  function drawNotes() {
+    noteBoxes.clear();
+    const g = el("g", null, svg);
+    store.state.notes.forEach((n) => {
+      const sel = store.selection.has(n.id);
+      const t = el("text", {
+        x: n.x, y: n.y,
+        class: "note" + (sel ? " is-selected" : ""),
+        "data-edit": "note", "data-id": n.id
+      }, g);
+      t.textContent = n.text || "…";
+      try {
+        const b = t.getBBox();
+        noteBoxes.set(n.id, { x0: b.x - 4, y0: b.y - 3, x1: b.x + b.width + 4, y1: b.y + b.height + 3 });
+      } catch {
+        const w = (n.text || "…").length * 7.4;
+        noteBoxes.set(n.id, { x0: n.x - 4, y0: n.y - 16, x1: n.x + w + 4, y1: n.y + 5 });
+      }
+      if (sel) {
+        const b = noteBoxes.get(n.id);
+        el("rect", { x: b.x0, y: b.y0, width: b.x1 - b.x0, height: b.y1 - b.y0, class: "sel-box", rx: 2 }, g);
+      }
+    });
+  }
+
   function drawProbes() {
     const g = el("g", null, svg);
     store.state.probes.forEach((pr, i) => {
@@ -315,7 +360,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   }
 
   function drawGhosts() {
-    if (gesture?.mode === "band") {
+    if (gesture?.mode === "band" || gesture?.mode === "zoomband") {
       const b = gesture.box;
       el("rect", {
         x: Math.min(b.x0, b.x1), y: Math.min(b.y0, b.y1),
@@ -326,6 +371,10 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     if (tool === "wire" && wireRun && hover) {
       const e = ortho(wireRun, hover);
       el("line", { x1: wireRun.x, y1: wireRun.y, x2: e.x, y2: e.y, class: "preview" }, svg);
+    }
+    if (tool === "text" && hover) {
+      const t = el("text", { x: hover.x, y: hover.y, class: "note", opacity: "0.45" }, svg);
+      t.textContent = "text";
     }
     if (PARTS[tool] && hover) {
       const grp = el("g", { transform: `translate(${hover.x},${hover.y})`, class: "ghost" }, svg);
@@ -355,7 +404,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   /* ----------------------------------------------------------- gestures */
 
   svg.addEventListener("pointerdown", (evt) => {
-    if (evt.button === 1 || (evt.button === 0 && evt.altKey)) {
+    if (evt.button === 1 || (evt.button === 0 && evt.altKey) || (evt.button === 0 && tool === "pan")) {
       gesture = { mode: "pan", start: toSheet(evt), view: { ...view } };
       svg.setPointerCapture(evt.pointerId);
       evt.preventDefault();
@@ -382,6 +431,25 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       evt.preventDefault();
       if (tool === "wire") { wireRun = null; render(); return; }
       if (tool === "select") { handleDoubleClick(evt, p); return; }
+    }
+
+    if (tool === "zoomrect") {
+      gesture = { mode: "zoomband", box: { x0: p.x, y0: p.y, x1: p.x, y1: p.y } };
+      svg.setPointerCapture(evt.pointerId);
+      render();
+      return;
+    }
+
+    if (tool === "text") {
+      const note = { ref: null };
+      store.edit(() => { note.ref = store.addNote(sp.x, sp.y, ""); }, "note");
+      store.selection = new Set([note.ref.id]);
+      onSelectionChange?.();
+      render();
+      const anchor = svg.querySelector(`[data-edit="note"][data-id="${note.ref.id}"]`);
+      if (anchor) beginNoteEdit(note.ref, anchor);
+      say("Annotation added. Type the text, then press Enter.");
+      return;
     }
 
     if (tool === "probe") {
@@ -456,7 +524,8 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       origin: sp,
       moved: false,
       comps: store.selectedComps().map((c) => ({ c, x: c.x, y: c.y })),
-      wires: store.selectedWires().map((w) => ({ w, x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2 }))
+      wires: store.selectedWires().map((w) => ({ w, x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2 })),
+      notes: store.selectedNotes().map((n) => ({ n, x: n.x, y: n.y }))
     };
     svg.setPointerCapture(evt.pointerId);
     render();
@@ -472,7 +541,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       applyView();
       return;
     }
-    if (gesture?.mode === "band") {
+    if (gesture?.mode === "band" || gesture?.mode === "zoomband") {
       gesture.box.x1 = p.x; gesture.box.y1 = p.y;
       render();
       return;
@@ -485,6 +554,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
         r.w.x1 = r.x1 + dx; r.w.y1 = r.y1 + dy;
         r.w.x2 = r.x2 + dx; r.w.y2 = r.y2 + dy;
       });
+      gesture.notes.forEach((r) => { r.n.x = r.x + dx; r.n.y = r.y + dy; });
       render();
       return;
     }
@@ -498,6 +568,20 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   svg.addEventListener("pointerup", (evt) => {
     try { svg.releasePointerCapture(evt.pointerId); } catch { /* not captured */ }
     if (!gesture) return;
+
+    if (gesture.mode === "zoomband") {
+      const b = gesture.box;
+      const w = Math.abs(b.x1 - b.x0), h = Math.abs(b.y1 - b.y0);
+      gesture = null;
+      if (w < 8 && h < 8) {
+        zoomBy(0.7, { x: b.x0, y: b.y0 });          // a plain click steps in
+        say("Zoomed in.");
+      } else {
+        zoomToRect({ x: Math.min(b.x0, b.x1), y: Math.min(b.y0, b.y1), w, h });
+        say("Zoomed to the selected region.");
+      }
+      return;
+    }
 
     if (gesture.mode === "band") {
       const b = gesture.box;
@@ -513,6 +597,10 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       store.state.wires.forEach((w) => {
         if (Math.min(w.x1, w.x2) >= r.x0 && Math.max(w.x1, w.x2) <= r.x1 &&
             Math.min(w.y1, w.y2) >= r.y0 && Math.max(w.y1, w.y2) <= r.y1) store.selection.add(w.id);
+      });
+      store.state.notes.forEach((n) => {
+        const b = noteBoxes.get(n.id);
+        if (b && b.x0 >= r.x0 && b.x1 <= r.x1 && b.y0 >= r.y0 && b.y1 <= r.y1) store.selection.add(n.id);
       });
       onSelectionChange?.();
       const n = store.selection.size;
@@ -536,13 +624,44 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     if (tool === "wire" && wireRun) { evt.preventDefault(); wireRun = null; render(); }
   });
 
+  /**
+   * Edit an annotation in place. An annotation left empty is removed, so a
+   * stray click with the text tool does not leave an invisible object behind.
+   */
+  function beginNoteEdit(note, anchorEl) {
+    openEditor({
+      anchorEl,
+      value: note.text,
+      label: "Annotation text",
+      commit: (next) => {
+        if (next) store.edit(() => { note.text = next; }, "note-edit");
+        else store.edit((s) => { s.notes = s.notes.filter((n) => n.id !== note.id); }, "note-remove");
+      },
+      cancelIfEmpty: () => {
+        if (!note.text) store.edit((s) => { s.notes = s.notes.filter((n) => n.id !== note.id); }, "note-remove");
+      }
+    });
+  }
+
   /** Route a double-click to the right editor, or to the inspector. */
   function handleDoubleClick(evt, sheetPoint) {
     lastDown = null;
     const text = evt.target.closest?.("[data-edit]");
     if (text && text.isConnected) {
-      const comp = store.comp(Number(text.getAttribute("data-id")));
-      if (comp) { beginInlineEdit(comp, text.getAttribute("data-edit"), text); return; }
+      const id = Number(text.getAttribute("data-id"));
+      const kind = text.getAttribute("data-edit");
+      if (kind === "note") {
+        const note = store.note(id);
+        if (note) { beginNoteEdit(note, text); return; }
+      }
+      const comp = store.comp(id);
+      if (comp) { beginInlineEdit(comp, kind, text); return; }
+    }
+    const noteHit = hitAt(sheetPoint);
+    if (noteHit?.kind === "note") {
+      const note = store.note(noteHit.id);
+      const anchor = svg.querySelector(`[data-edit="note"][data-id="${note.id}"]`);
+      if (note && anchor) { beginNoteEdit(note, anchor); return; }
     }
     const hit = hitAt(sheetPoint);
     if (hit?.kind !== "comp") return;
@@ -563,44 +682,34 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
    * text it replaces rather than using foreignObject, which keeps focus and
    * selection behaving the way people expect from an ordinary field.
    */
-  function beginInlineEdit(comp, which, anchorEl) {
-    const field = which === "label" ? null : inlineField(comp);
-    if (which !== "label" && !field) {
-      onNeedsInspector?.(comp);
-      return;
-    }
-
+  /**
+   * One text editor parked over whatever is being changed — a part value, a
+   * designator, or an annotation. Shared so all three behave identically:
+   * Enter commits, Escape abandons, clicking away commits.
+   */
+  function openEditor({ anchorEl, value, label, commit, cancelIfEmpty }) {
     const hostRect = host.getBoundingClientRect();
     const rect = anchorEl.getBoundingClientRect();
 
     const input = document.createElement("input");
     input.type = "text";
     input.className = "inline-edit";
-    input.value = which === "label" ? comp.label : (comp[field.k] ?? "");
-    input.setAttribute("aria-label", which === "label"
-      ? `Reference designator for ${comp.label}`
-      : `${field.label} for ${comp.label}`);
+    input.value = value ?? "";
+    input.setAttribute("aria-label", label);
     input.style.left = `${Math.max(2, rect.left - hostRect.left - 6)}px`;
     input.style.top = `${rect.top - hostRect.top - 4}px`;
-    input.style.width = `${Math.max(72, rect.width + 28)}px`;
+    input.style.width = `${Math.max(96, rect.width + 40)}px`;
 
     let done = false;
     const openedAt = performance.now();
-    const finish = (commit) => {
+    const finish = (accept) => {
       if (done) return;
       done = true;
       const next = input.value.trim();
       input.remove();
       editing = null;
-      if (commit && next) {
-        store.edit(() => {
-          if (which === "label") comp.label = next;
-          else comp[field.k] = next;
-        }, "inline-edit");
-        say(`${comp.label} set to ${next}.`);
-      } else {
-        render();
-      }
+      if (accept) commit(next);
+      else { cancelIfEmpty?.(); render(); }
     };
 
     input.addEventListener("keydown", (evt) => {
@@ -620,6 +729,30 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     input.focus();
     input.select();
   }
+
+  function beginInlineEdit(comp, which, anchorEl) {
+    const field = which === "label" ? null : inlineField(comp);
+    if (which !== "label" && !field) {
+      onNeedsInspector?.(comp);
+      return;
+    }
+    openEditor({
+      anchorEl,
+      value: which === "label" ? comp.label : (comp[field.k] ?? ""),
+      label: which === "label"
+        ? `Reference designator for ${comp.label}`
+        : `${field.label} for ${comp.label}`,
+      commit: (next) => {
+        if (!next) { render(); return; }
+        store.edit(() => {
+          if (which === "label") comp.label = next;
+          else comp[field.k] = next;
+        }, "inline-edit");
+        say(`${comp.label} set to ${next}.`);
+      }
+    });
+  }
+
 
   svg.addEventListener("wheel", (evt) => {
     evt.preventDefault();
@@ -642,6 +775,9 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       wireRun = null;
       svg.classList.toggle("mode-select", t === "select");
       svg.classList.toggle("mode-probe", t === "probe");
+      svg.classList.toggle("mode-pan", t === "pan");
+      svg.classList.toggle("mode-zoom", t === "zoomrect");
+      svg.classList.toggle("mode-text", t === "text");
       render();
     },
     rotateGhost() {

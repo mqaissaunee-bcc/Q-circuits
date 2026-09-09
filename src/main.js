@@ -83,12 +83,12 @@ function shortName(def) {
 
 function setTool(tool) {
   canvas.setTool(tool);
-  document.querySelectorAll("#modeTools button, #partTools button").forEach((b) => {
+  document.querySelectorAll("#modeTools button, #viewTools button, #partTools button").forEach((b) => {
     b.setAttribute("aria-pressed", b.dataset.tool === tool ? "true" : "false");
   });
 }
 
-document.querySelectorAll("#modeTools, #partTools").forEach((group) => {
+document.querySelectorAll("#modeTools, #viewTools, #partTools").forEach((group) => {
   group.addEventListener("click", (evt) => {
     const b = evt.target.closest("button[data-tool]");
     if (!b) return;
@@ -118,7 +118,7 @@ $("btnFit").addEventListener("click", () => { canvas.fit(); say("View fitted to 
 const TOOL_KEYS = {
   s: "select", w: "wire", b: "probe", r: "R", c: "C", l: "L",
   v: "V", i: "I", d: "D", g: "GND", q: "NPN", m: "NMOS", u: "OPAMP",
-  a: "AM"
+  a: "AM", h: "pan", z: "zoomrect", t: "text"
 };
 
 document.addEventListener("keydown", (evt) => {

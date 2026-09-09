@@ -53,6 +53,7 @@ function toPayload(state) {
     w: state.wires.map(({ id, ...rest }) => rest),
     q: state.seq,
     p: state.probes,
+    n: state.notes,
     a: state.analysis
   };
 }
@@ -64,6 +65,7 @@ function fromPayload(p) {
     wires: p.w || [],
     seq: p.q || {},
     probes: p.p || [],
+    notes: p.n || [],
     analysis: p.a || {}
   };
 }
