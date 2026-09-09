@@ -47,6 +47,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   let net = null;          // last connectivity result, for probe hit tests
   let editing = null;      // the inline <input>, when one is open
   let lastDown = null;     // for detecting a double-click ourselves
+  let caret = null;        // grid position for keyboard placement
   const noteBoxes = new Map();  // note id -> measured bounds, for hit testing
 
   const say = (m) => onStatus?.(m);
@@ -169,6 +170,22 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     return null;
   }
 
+  /** A free wire end near the pointer, ignoring ends that sit on a pin. */
+  function wireEndAt(p) {
+    const tol = 8 * (view.w / SHEET_W);
+    const pins = new Set();
+    store.state.comps.forEach((c) => pinsOf(c).forEach((q) => pins.add(`${q.x},${q.y}`)));
+    for (const w of store.state.wires) {
+      for (const end of [1, 2]) {
+        const x = end === 1 ? w.x1 : w.x2;
+        const y = end === 1 ? w.y1 : w.y2;
+        if (pins.has(`${x},${y}`)) continue;      // that end belongs to a part
+        if (Math.hypot(p.x - x, p.y - y) < tol) return { wire: w, end };
+      }
+    }
+    return null;
+  }
+
   /** Nearest wire or pin coordinate to click for a voltage probe. */
   function probeTargetAt(p) {
     const tol = 9 * (view.w / SHEET_W);
@@ -223,6 +240,10 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     store.state.wires.forEach((w) => {
       const sel = store.selection.has(w.id);
       el("line", { x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2, class: "wire" + (sel ? " is-selected" : "") }, g);
+      if (sel) {
+        el("rect", { x: w.x1 - 4, y: w.y1 - 4, width: 8, height: 8, class: "wire-handle" }, g);
+        el("rect", { x: w.x2 - 4, y: w.y2 - 4, width: 8, height: 8, class: "wire-handle" }, g);
+      }
     });
   }
 
@@ -372,6 +393,11 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       const e = ortho(wireRun, hover);
       el("line", { x1: wireRun.x, y1: wireRun.y, x2: e.x, y2: e.y, class: "preview" }, svg);
     }
+    if (caret && tool !== "select" && tool !== "pan" && tool !== "zoomrect") {
+      const g = el("g", { class: "caret", "aria-hidden": "true" }, svg);
+      el("path", { d: `M${caret.x - 11} ${caret.y}H${caret.x + 11}M${caret.x} ${caret.y - 11}V${caret.y + 11}` }, g);
+      el("circle", { cx: caret.x, cy: caret.y, r: 3 }, g);
+    }
     if (tool === "text" && hover) {
       const t = el("text", { x: hover.x, y: hover.y, class: "note", opacity: "0.45" }, svg);
       t.textContent = "text";
@@ -404,7 +430,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   /* ----------------------------------------------------------- gestures */
 
   svg.addEventListener("pointerdown", (evt) => {
-    if (evt.button === 1 || (evt.button === 0 && evt.altKey) || (evt.button === 0 && tool === "pan")) {
+    if (evt.button === 1 || (evt.button === 0 && tool === "pan")) {
       gesture = { mode: "pan", start: toSheet(evt), view: { ...view } };
       svg.setPointerCapture(evt.pointerId);
       evt.preventDefault();
@@ -500,7 +526,21 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       return;
     }
 
-    // select tool
+    // select tool: grabbing a wire end reroutes it
+    if (tool === "select" && !evt.altKey) {
+      const grab = wireEndAt(p);
+      if (grab) {
+        store.selection = new Set([grab.wire.id]);
+        onSelectionChange?.();
+        store.begin();
+        gesture = { mode: "wire-end", wire: grab.wire, end: grab.end, moved: false };
+        svg.setPointerCapture(evt.pointerId);
+        render();
+        say("Dragging the end of a wire.");
+        return;
+      }
+    }
+
     const hit = hitAt(p);
     if (!hit) {
       if (!evt.shiftKey) { store.selection.clear(); onSelectionChange?.(); }
@@ -518,9 +558,27 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     }
     onSelectionChange?.();
 
+    // Alt-drag leaves a copy behind: the duplicates are created on the spot and
+    // it is those that follow the pointer.
+    let duplicating = false;
+    if (evt.altKey && store.selection.size) {
+      store.copySelection();
+      if (store.paste(0, 0)) {
+        duplicating = true;
+        onSelectionChange?.();
+        say("Dragging a copy.");
+      }
+    }
+
     store.begin();
     gesture = {
       mode: "move",
+      duplicating,
+      attached: store.attachedWireEnds(store.selectedComps()).map((a) => ({
+        ...a,
+        x: a.end === 1 ? a.wire.x1 : a.wire.x2,
+        y: a.end === 1 ? a.wire.y1 : a.wire.y2
+      })),
       origin: sp,
       moved: false,
       comps: store.selectedComps().map((c) => ({ c, x: c.x, y: c.y })),
@@ -546,6 +604,14 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       render();
       return;
     }
+    if (gesture?.mode === "wire-end") {
+      const w = gesture.wire;
+      if (gesture.end === 1) { w.x1 = sp.x; w.y1 = sp.y; } else { w.x2 = sp.x; w.y2 = sp.y; }
+      gesture.moved = true;
+      render();
+      return;
+    }
+
     if (gesture?.mode === "move") {
       const dx = sp.x - gesture.origin.x, dy = sp.y - gesture.origin.y;
       if (dx || dy) gesture.moved = true;
@@ -555,6 +621,13 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
         r.w.x2 = r.x2 + dx; r.w.y2 = r.y2 + dy;
       });
       gesture.notes.forEach((r) => { r.n.x = r.x + dx; r.n.y = r.y + dy; });
+      // Attached wire ends travel with the part, so the wire stretches rather
+      // than detaching. It may end up diagonal; that is the trade for keeping
+      // the connection.
+      gesture.attached.forEach((a) => {
+        if (a.end === 1) { a.wire.x1 = a.x + dx; a.wire.y1 = a.y + dy; }
+        else { a.wire.x2 = a.x + dx; a.wire.y2 = a.y + dy; }
+      });
       render();
       return;
     }
@@ -607,8 +680,22 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       say(n ? `${n} item${n === 1 ? "" : "s"} selected.` : "Selection cleared.");
     }
 
+    if (gesture.mode === "wire-end") {
+      const w = gesture.wire;
+      if (gesture.moved && w.x1 === w.x2 && w.y1 === w.y2) {
+        // Dragged onto itself: a zero-length wire is invisible and confusing.
+        store.state.wires = store.state.wires.filter((k) => k.id !== w.id);
+        say("Wire removed.");
+      }
+      if (gesture.moved) store.commit("wire-edit"); else store.pendingSnapshot = null;
+      gesture = null;
+      render();
+      return;
+    }
+
     if (gesture.mode === "move") {
-      if (gesture.moved) store.commit("move");
+      if (gesture.moved) store.squareUpAttached(gesture.attached);
+      if (gesture.moved || gesture.duplicating) store.commit("move");
       else store.pendingSnapshot = null;
     }
 
@@ -641,6 +728,46 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
         if (!note.text) store.edit((s) => { s.notes = s.notes.filter((n) => n.id !== note.id); }, "note-remove");
       }
     });
+  }
+
+  /** Drop the active part, or start/extend a wire, at a grid point. */
+  function placeAt(sp) {
+    if (PARTS[tool]) {
+      let placed;
+      store.edit(() => {
+        placed = store.addComp(tool, sp.x, sp.y, PARTS[tool].prefix);
+        placed.rot = ghostRot;
+      }, "place");
+      store.selection = new Set([placed.id]);
+      onSelectionChange?.();
+      render();
+      say(`${placed.label} placed at ${sp.x}, ${sp.y}.`);
+      return placed;
+    }
+    if (tool === "wire") {
+      if (!wireRun) { wireRun = { ...sp }; say("Wire started."); }
+      else {
+        const e = ortho(wireRun, sp);
+        if (e.x !== wireRun.x || e.y !== wireRun.y) {
+          store.edit(() => store.addWire(wireRun.x, wireRun.y, e.x, e.y), "wire");
+          wireRun = e;
+          say("Wire segment added.");
+        }
+      }
+      render();
+      return null;
+    }
+    if (tool === "text") {
+      let note;
+      store.edit(() => { note = store.addNote(sp.x, sp.y, ""); }, "note");
+      store.selection = new Set([note.id]);
+      render();
+      const anchor = svg.querySelector(`[data-edit="note"][data-id="${note.id}"]`);
+      if (anchor) beginNoteEdit(note, anchor);
+      say("Annotation added. Type the text, then press Enter.");
+      return note;
+    }
+    return null;
   }
 
   /** Route a double-click to the right editor, or to the inspector. */
@@ -767,6 +894,25 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     fit,
     isEditing: () => !!editing,
     contentBox,
+
+    /** True when a tool places things and so owns the arrow keys. */
+    isPlacing: () => !!PARTS[tool] || tool === "wire" || tool === "text",
+
+    /** Nudge the keyboard placement cursor, creating it at the view centre. */
+    moveCaret(dx, dy) {
+      if (!caret) caret = { x: snap(view.x + view.w / 2), y: snap(view.y + view.h / 2) };
+      else caret = { x: snap(caret.x + dx), y: snap(caret.y + dy) };
+      render();
+      return caret;
+    },
+
+    /** Place whatever the active tool places, at the cursor. */
+    commitCaret() {
+      if (!caret) caret = { x: snap(view.x + view.w / 2), y: snap(view.y + view.h / 2) };
+      return placeAt({ ...caret });
+    },
+
+    clearCaret() { caret = null; render(); },
     zoomIn: () => zoomBy(0.8),
     zoomOut: () => zoomBy(1.25),
     getTool: () => tool,

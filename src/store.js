@@ -7,12 +7,13 @@
  * live but only committed to the history when the gesture ends.
  */
 
-import { makeComp } from "./parts.js";
+import { makeComp, pinsOf } from "./parts.js";
 
 const STORAGE_KEY = "q-circuits-v1";
 const LEGACY_STORAGE_KEY = "spice-lab-v1";     // autosave from before the rename
 const DOC_FORMAT = "q-circuits-circuit";
 const LIBRARY_KEY = "q-circuits-library-v1";
+const PROGRESS_KEY = "q-circuits-progress-v1";
 const LEGACY_DOC_FORMATS = new Set([DOC_FORMAT, "spice-lab-circuit"]);
 const HISTORY_LIMIT = 60;
 
@@ -264,15 +265,62 @@ export class Store {
     return true;
   }
 
+  /**
+   * Wire ends sitting on a pin of one of `comps`. Moving a part drags these
+   * with it so the wire stretches instead of tearing off. Wires that are
+   * themselves selected are skipped — those travel whole.
+   */
+  attachedWireEnds(comps) {
+    const pins = new Set();
+    comps.forEach((c) => pinsOf(c).forEach((p) => pins.add(`${p.x},${p.y}`)));
+    const out = [];
+    this.state.wires.forEach((w) => {
+      if (this.selection.has(w.id)) return;
+      const horizontal = w.y1 === w.y2;
+      if (pins.has(`${w.x1},${w.y1}`)) out.push({ wire: w, end: 1, horizontal });
+      if (pins.has(`${w.x2},${w.y2}`)) out.push({ wire: w, end: 2, horizontal });
+    });
+    return out;
+  }
+
+  /**
+   * A stretched wire ends up diagonal, which is not how a schematic is drawn.
+   * Once the move is finished, bend each one into an elbow: along its original
+   * axis from the end that stayed put, then square across to the end that moved.
+   */
+  squareUpAttached(attached) {
+    attached.forEach(({ wire, end, horizontal }) => {
+      const w = this.wire(wire.id);
+      if (!w || w.x1 === w.x2 || w.y1 === w.y2) return;   // already orthogonal
+      if (end === 2) {
+        const corner = horizontal ? { x: w.x2, y: w.y1 } : { x: w.x1, y: w.y2 };
+        const moved = { x: w.x2, y: w.y2 };
+        w.x2 = corner.x; w.y2 = corner.y;
+        this.addWire(corner.x, corner.y, moved.x, moved.y);
+      } else {
+        const corner = horizontal ? { x: w.x1, y: w.y2 } : { x: w.x2, y: w.y1 };
+        const moved = { x: w.x1, y: w.y1 };
+        w.x1 = corner.x; w.y1 = corner.y;
+        this.addWire(moved.x, moved.y, corner.x, corner.y);
+      }
+    });
+  }
+
   moveSelection(dx, dy) {
     const comps = this.selectedComps();
     const wires = this.selectedWires();
     const notes = this.selectedNotes();
     if (!comps.length && !wires.length && !notes.length) return false;
+    // Work out what is attached before anything moves.
+    const attached = this.attachedWireEnds(comps);
     this.edit(() => {
       comps.forEach((c) => { c.x += dx; c.y += dy; });
       wires.forEach((w) => { w.x1 += dx; w.y1 += dy; w.x2 += dx; w.y2 += dy; });
       notes.forEach((n) => { n.x += dx; n.y += dy; });
+      attached.forEach(({ wire, end }) => {
+        if (end === 1) { wire.x1 += dx; wire.y1 += dy; } else { wire.x2 += dx; wire.y2 += dy; }
+      });
+      this.squareUpAttached(attached);
     }, "move");
     return true;
   }
@@ -353,6 +401,31 @@ export class Store {
     this.writeLibrary(lib);
     this.emit("library");
     return true;
+  }
+
+  /* ------------------------------------------------------- lab progress */
+
+  readProgress() {
+    try {
+      const raw = localStorage.getItem(PROGRESS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch { return {}; }
+  }
+
+  /** Record a lab as passed. Progress only ever moves forwards. */
+  recordLabPass(labId) {
+    const progress = this.readProgress();
+    if (progress[labId]?.passed) return progress;
+    progress[labId] = { passed: true, at: new Date().toISOString() };
+    try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress)); } catch { /* storage blocked */ }
+    return progress;
+  }
+
+  labPassed(labId) { return !!this.readProgress()[labId]?.passed; }
+
+  clearProgress() {
+    try { localStorage.removeItem(PROGRESS_KEY); } catch { /* storage blocked */ }
   }
 
   /* --------------------------------------------------------- persistence */

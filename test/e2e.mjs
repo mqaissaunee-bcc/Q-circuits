@@ -386,6 +386,154 @@ const ampChecks = await page.$$eval("#checkResults .check-list li", (els) =>
 check("lab detects the inversion", ampChecks[0].pass, ampChecks[0].text);
 check("lab detects clipping against whatever the rails are set to", ampChecks[1].pass, ampChecks[1].text);
 
+/* --------------------------------------------- wire stretch and duplicate */
+
+console.log("\n— moving parts, stretching wires —");
+await page.evaluate(() => {
+  document.getElementById("labSelect").value = "divider";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+});
+await page.waitForTimeout(200);
+
+const stretched = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  const r1 = S.state.comps.find((c) => c.label === "R1");
+  const before = JSON.parse(JSON.stringify(S.state.wires));
+  const wiresBefore = S.state.wires.length;
+  S.selection = new Set([r1.id]);
+  S.moveSelection(60, 0);
+  const netlist = () => {
+    const n = window.__spiceLab.refresh();
+    return document.getElementById("netOut").value;
+  };
+  return {
+    wiresBefore, wiresAfter: S.state.wires.length,
+    moved: before.filter((w, i) => JSON.stringify(w) !== JSON.stringify(S.state.wires[i])).length,
+    netlist: netlist(),
+    checks: document.getElementById("checks").textContent
+  };
+});
+check("the attached wire ends followed the part", stretched.moved >= 1, `${stretched.moved} wires changed`);
+check("stretched wires are squared into elbows, never left diagonal",
+  await page.evaluate(() => window.__spiceLab.store.state.wires.every((w) => w.x1 === w.x2 || w.y1 === w.y2)),
+  `${stretched.wiresBefore} → ${stretched.wiresAfter} wires`);
+check("connectivity survives the move", stretched.netlist.includes("R1 1 2 6.8k"),
+  stretched.netlist.split("\n").filter((l) => l && !l.startsWith("*")).join(" | "));
+check("no node was orphaned by the move", !stretched.checks.includes("only one pin"),
+  stretched.checks.replace(/\s+/g, " ").trim().slice(0, 90));
+
+const detached = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  S.undo();
+  const r1 = S.state.comps.find((c) => c.label === "R1");
+  // A wire that is itself selected travels whole rather than stretching.
+  S.selection = new Set([r1.id, S.state.wires[0].id]);
+  const w0 = { ...S.state.wires[0] };
+  S.moveSelection(0, 40);
+  const now = S.state.wires[0];
+  return { dx1: now.x1 - w0.x1, dy1: now.y1 - w0.y1, dx2: now.x2 - w0.x2, dy2: now.y2 - w0.y2 };
+});
+check("a selected wire moves whole instead of stretching",
+  detached.dy1 === 40 && detached.dy2 === 40, JSON.stringify(detached));
+await page.evaluate(() => window.__spiceLab.store.undo());
+
+// Alt-drag leaves a copy behind
+await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  S.selection = new Set([S.state.comps.find((c) => c.label === "R2").id]);
+});
+const dupBox = await boxOf(page, "svg.sheet");
+const dupBefore = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
+const r2pos = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  const r2 = S.state.comps.find((c) => c.label === "R2");
+  const vb = document.querySelector("svg.sheet").getAttribute("viewBox").split(" ").map(Number);
+  return { x: r2.x, y: r2.y, vb };
+});
+const toScreen = (sx, sy) => ({
+  x: dupBox.x + ((sx - r2pos.vb[0]) / r2pos.vb[2]) * dupBox.width,
+  y: dupBox.y + ((sy - r2pos.vb[1]) / r2pos.vb[3]) * dupBox.height
+});
+const from = toScreen(r2pos.x, r2pos.y + 30);
+await page.keyboard.down("Alt");
+await page.mouse.move(from.x, from.y);
+await page.mouse.down();
+await page.mouse.move(from.x + 90, from.y + 60, { steps: 8 });
+await page.mouse.up();
+await page.keyboard.up("Alt");
+await page.waitForTimeout(200);
+const dupAfter = await page.evaluate(() => ({
+  count: window.__spiceLab.store.state.comps.length,
+  labels: window.__spiceLab.store.state.comps.map((c) => c.label)
+}));
+check("Alt-drag leaves a copy behind", dupAfter.count === dupBefore + 1,
+  `${dupBefore} → ${dupAfter.count}`);
+check("the copy gets its own designator", new Set(dupAfter.labels).size === dupAfter.labels.length,
+  dupAfter.labels.join(","));
+
+/* --------------------------------------------- traces, help, progress ---- */
+
+console.log("\n— accessibility and progress —");
+const dashes = await page.evaluate(async () => {
+  document.getElementById("labSelect").value = "rectifier";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+  await window.__spiceLab.run();
+  return [...document.querySelectorAll(".legend-item .swatch line")]
+    .map((l) => ({ stroke: l.getAttribute("stroke"), dash: l.getAttribute("stroke-dasharray") }));
+});
+check("each trace has its own line pattern, not just a colour",
+  dashes.length >= 2 && dashes[0].dash !== dashes[1].dash,
+  dashes.map((d) => d.dash || "solid").join(" / "));
+
+await page.click("#btnHelp");
+await page.waitForTimeout(200);
+const help = await page.evaluate(() => {
+  const d = document.getElementById("helpDialog");
+  return { open: d.open, entries: d.querySelectorAll("dl.shortcuts dt").length,
+           focusInside: d.contains(document.activeElement) };
+});
+check("the shortcuts dialog opens", help.open);
+check("it lists the shortcuts", help.entries > 20, `${help.entries} entries`);
+await page.keyboard.press("Escape");
+await page.waitForTimeout(200);
+check("Escape closes it", !(await page.evaluate(() => document.getElementById("helpDialog").open)));
+
+// keyboard placement
+await page.click('#partTools button[data-tool="R"]');
+const kbBefore = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
+await page.keyboard.press("ArrowRight");
+await page.keyboard.press("ArrowDown");
+const caretShown = await page.evaluate(() => !!document.querySelector("svg.sheet .caret"));
+await page.keyboard.press("Enter");
+await page.waitForTimeout(200);
+const kbAfter = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
+check("arrow keys show a placement cursor", caretShown);
+check("Enter places a part without the mouse", kbAfter === kbBefore + 1, `${kbBefore} → ${kbAfter}`);
+await page.keyboard.press("Escape");
+
+// lab progress is recorded on a full pass
+const progress = await page.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  S.clearProgress();
+  document.getElementById("labSelect").value = "rectifier";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+  const before = S.labPassed("rectifier");
+  document.getElementById("btnCheck").click();
+  await new Promise((r) => setTimeout(r, 6000));
+  return {
+    before,
+    after: S.labPassed("rectifier"),
+    option: [...document.querySelectorAll("#labSelect option")].find((o) => o.value === "rectifier").textContent,
+    banner: document.getElementById("labProgress").hidden ? "" : document.getElementById("labProgress").textContent,
+    tally: document.getElementById("labTally").textContent
+  };
+});
+check("a lab is not marked passed before it is checked", progress.before === false);
+check("passing every check records the lab", progress.after === true);
+check("the passed lab is ticked in the list", progress.option.includes("\u2713"), progress.option);
+check("the lab panel shows when it was passed", /Passed on/.test(progress.banner), progress.banner);
+check("the tally counts passed labs", /1 of 5 passed/.test(progress.tally), progress.tally);
+
 /* ------------------------------------------------- pan, zoom area, text */
 
 console.log("\n— navigation and annotation tools —");

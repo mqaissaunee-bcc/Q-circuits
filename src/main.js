@@ -113,6 +113,22 @@ $("btnZoomIn").addEventListener("click", () => canvas.zoomIn());
 $("btnZoomOut").addEventListener("click", () => canvas.zoomOut());
 $("btnFit").addEventListener("click", () => { canvas.fit(); say("View fitted to the circuit."); });
 
+/* ------------------------------------------------------- shortcuts help */
+
+const helpDialog = $("helpDialog");
+function openHelp() {
+  if (typeof helpDialog.showModal === "function") helpDialog.showModal();
+  else helpDialog.setAttribute("open", "");
+  say("Keyboard shortcuts opened.");
+}
+function closeHelp() {
+  if (typeof helpDialog.close === "function") helpDialog.close();
+  else helpDialog.removeAttribute("open");
+}
+$("btnHelp").addEventListener("click", openHelp);
+$("btnHelpClose").addEventListener("click", closeHelp);
+helpDialog.addEventListener("click", (evt) => { if (evt.target === helpDialog) closeHelp(); });
+
 /* ------------------------------------------------------------- keyboard */
 
 const TOOL_KEYS = {
@@ -151,9 +167,37 @@ document.addEventListener("keydown", (evt) => {
   if (typing) return;
   const key = evt.key.toLowerCase();
 
+  if (evt.key === "?" || (key === "/" && evt.shiftKey)) { evt.preventDefault(); openHelp(); return; }
   if (TOOL_KEYS[key]) { setTool(TOOL_KEYS[key]); say(`${key.toUpperCase()} tool active.`); return; }
   if (key === "o") { $("btnRotate").click(); return; }
-  if (evt.key === "Escape") { canvas.cancel(); store.selection.clear(); setTool("select"); refresh(); say("Back to select."); return; }
+  if (evt.key === "Escape") {
+    canvas.clearCaret();
+    canvas.cancel();
+    store.selection.clear();
+    setTool("select");
+    refresh();
+    say("Back to select.");
+    return;
+  }
+
+  // A placing tool owns Enter and the arrow keys, so a part can be positioned
+  // and dropped without touching the mouse.
+  if (canvas.isPlacing()) {
+    if (evt.key === "Enter") {
+      evt.preventDefault();
+      canvas.commitCaret();
+      return;
+    }
+    if (evt.key.startsWith("Arrow")) {
+      evt.preventDefault();
+      const step = evt.shiftKey ? 100 : 20;
+      const deltas = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+      const [dx, dy] = deltas[evt.key];
+      const at = canvas.moveCaret(dx, dy);
+      say(`Placement cursor at ${at.x}, ${at.y}. Press Enter to place.`);
+      return;
+    }
+  }
   if (evt.key === "Delete" || evt.key === "Backspace") { evt.preventDefault(); $("btnDelete").click(); return; }
   if (evt.key.startsWith("Arrow") && store.selection.size) {
     evt.preventDefault();
@@ -543,11 +587,30 @@ $("btnCsv").addEventListener("click", () => {
 /* ----------------------------------------------------------------- labs */
 
 const labSelect = $("labSelect");
-LABS.forEach((l) => {
-  const o = document.createElement("option");
-  o.value = l.id; o.textContent = l.title;
-  labSelect.appendChild(o);
-});
+
+/** Rebuild the lab list, ticking the ones already passed. */
+function renderLabList() {
+  const keep = labSelect.value;
+  labSelect.replaceChildren();
+  const free = document.createElement("option");
+  free.value = ""; free.textContent = "Free build";
+  labSelect.appendChild(free);
+
+  let passed = 0;
+  LABS.forEach((l) => {
+    const done = store.labPassed(l.id);
+    if (done) passed++;
+    const o = document.createElement("option");
+    o.value = l.id;
+    o.textContent = done ? `${l.title}  \u2713` : l.title;
+    labSelect.appendChild(o);
+  });
+  labSelect.value = keep;
+
+  const tally = $("labTally");
+  tally.textContent = passed ? `${passed} of ${LABS.length} passed` : "";
+}
+renderLabList();
 
 labSelect.addEventListener("change", () => {
   const lab = labById(labSelect.value);
@@ -563,6 +626,7 @@ labSelect.addEventListener("change", () => {
   if (!lab) {
     $("labSummary").textContent = "";
     $("labTasks").replaceChildren();
+    $("labProgress").hidden = true;
     $("btnCheck").disabled = true;
     say("Free build mode.");
     return;
@@ -577,6 +641,15 @@ labSelect.addEventListener("change", () => {
 
 /** Fill the lab panel with a lab's brief and tasks. */
 function renderLabPanel(lab) {
+  const done = store.labPassed(lab.id);
+  const banner = $("labProgress");
+  banner.hidden = !done;
+  if (done) {
+    const at = store.readProgress()[lab.id]?.at;
+    banner.textContent = at
+      ? `\u2713 Passed on ${new Date(at).toLocaleDateString(undefined, { month: "long", day: "numeric" })}`
+      : "\u2713 Passed";
+  }
   $("labSummary").textContent = lab.summary;
   const ol = $("labTasks");
   ol.replaceChildren();
@@ -635,7 +708,14 @@ $("btnCheck").addEventListener("click", async () => {
   host.appendChild(ul);
 
   const passed = outcome.results.filter((r) => r.pass).length;
-  say(`${passed} of ${outcome.results.length} checks passed.`);
+  if (outcome.ok) {
+    store.recordLabPass(currentLab.id);
+    renderLabList();
+    renderLabPanel(currentLab);
+    say(`All ${outcome.results.length} checks passed. ${currentLab.title} is complete.`);
+  } else {
+    say(`${passed} of ${outcome.results.length} checks passed.`);
+  }
 });
 
 /* ------------------------------------------------------- saved circuits */
@@ -726,6 +806,7 @@ function detachLab() {
   currentLab = null;
   $("labTasks").replaceChildren();
   $("labSummary").textContent = "";
+  $("labProgress").hidden = true;
   $("checkResults").replaceChildren();
   $("btnCheck").disabled = true;
 }

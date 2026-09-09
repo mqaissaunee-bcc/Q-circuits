@@ -16,6 +16,12 @@ import { formatEng } from "./netlist.js";
 const PAD = { left: 62, right: 14, top: 14, bottom: 34 };
 const TRACE_VARS = ["--trace-0", "--trace-1", "--trace-2", "--trace-3", "--trace-4", "--trace-5"];
 
+/**
+ * A dash pattern per trace, so traces stay distinguishable without relying on
+ * colour. Solid first: the common single-trace case should look clean.
+ */
+export const TRACE_DASHES = [[], [8, 4], [2, 3], [11, 3, 2, 3], [5, 3, 1, 3], [1, 4]];
+
 function niceTicks(min, max, target = 6) {
   if (!isFinite(min) || !isFinite(max) || min === max) return [min];
   const raw = (max - min) / target;
@@ -270,7 +276,9 @@ export function createScope({ host, measureHost, onStatus }) {
     ctx.lineJoin = "round";
     traces.forEach((t) => {
       const s = seriesOf(t);
-      ctx.strokeStyle = c.traces[result.traces.indexOf(t) % c.traces.length];
+      const idx = result.traces.indexOf(t);
+      ctx.strokeStyle = c.traces[idx % c.traces.length];
+      ctx.setLineDash(TRACE_DASHES[idx % TRACE_DASHES.length]);
       ctx.beginPath();
       let started = false;
       for (let k = 0; k < s.length && k < xs.length; k++) {
@@ -281,6 +289,7 @@ export function createScope({ host, measureHost, onStatus }) {
       }
       ctx.stroke();
     });
+    ctx.setLineDash([]);
 
     ctx.fillStyle = c.soft;
     ctx.font = '11px "IBM Plex Sans", system-ui, sans-serif';
@@ -356,9 +365,18 @@ export function createScope({ host, measureHost, onStatus }) {
       btn.className = "legend-item" + (hidden.has(t.name) ? " is-off" : "");
       btn.setAttribute("aria-pressed", hidden.has(t.name) ? "false" : "true");
 
-      const sw = document.createElement("span");
-      sw.className = "swatch";
-      sw.style.background = `var(${TRACE_VARS[i % TRACE_VARS.length]})`;
+      const sw = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      sw.setAttribute("class", "swatch");
+      sw.setAttribute("viewBox", "0 0 22 10");
+      sw.setAttribute("aria-hidden", "true");
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", "1"); line.setAttribute("y1", "5");
+      line.setAttribute("x2", "21"); line.setAttribute("y2", "5");
+      line.setAttribute("stroke", `var(${TRACE_VARS[i % TRACE_VARS.length]})`);
+      line.setAttribute("stroke-width", "2.5");
+      const dash = TRACE_DASHES[i % TRACE_DASHES.length];
+      if (dash.length) line.setAttribute("stroke-dasharray", dash.join(" "));
+      sw.appendChild(line);
       btn.appendChild(sw);
 
       const name = document.createElement("span");

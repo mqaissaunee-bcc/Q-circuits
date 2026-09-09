@@ -70,6 +70,28 @@ Run this on the weakest device you actually support, not just your desk.
 
 ## What it does
 
+**Moving parts keeps the wiring.** Drag a part and any wire end sitting on one
+of its pins travels with it. On release each stretched wire is bent into an
+elbow along its original axis, so the schematic never ends up full of diagonals.
+A wire that is itself selected moves whole instead of stretching.
+
+**Wire editing.** Select a wire and drag either end to reroute it. Ends resting
+on a pin are left alone, so grabbing near a part moves the part rather than
+pulling the wire off it. Dragging an end onto its other end removes the wire.
+
+**Alt-drag duplicates.** Hold Alt and drag a selection to peel off a copy,
+designators and all.
+
+**Keyboard placement.** With a part, wire or text tool active, the arrow keys
+move a placement cursor across the grid and Enter drops the part there. Hold
+Shift for five-square steps. Nothing on the sheet needs a mouse.
+
+**Shortcuts panel.** The Shortcuts button, or `?`, opens the full list.
+
+**Lab progress.** A lab that passes every check is ticked in the list and dated
+in the panel, with a running tally in the heading. Progress lives in the
+browser, so it is per machine rather than per student account.
+
 **Navigation.** A hand tool for dragging the view and a zoom-area tool for
 framing a rectangle, alongside the existing Alt-drag pan, scroll zoom, and Fit.
 Dragging with the zoom tool frames that region; clicking with it steps in.
@@ -115,8 +137,10 @@ magnitude in dB or phase, a hover cursor reading every trace at that point, a
 clickable legend, and CSV export. Place probes to narrow the plot to the nodes
 you care about.
 
-**Measurements.** Under every plot, a table gives min, max, peak-to-peak, mean,
-RMS, and frequency for each visible trace — the numbers lab worksheets actually
+**Measurements.** Traces are drawn with their own dash pattern as well as their
+own colour, so they stay distinguishable without relying on colour vision, and
+the legend swatches show the same pattern. Under every plot, a table gives min,
+max, peak-to-peak, mean, RMS, and frequency for each visible trace — the numbers lab worksheets actually
 ask for. Drag across the plot to measure a slice of it instead of the whole
 sweep, which is how you get steady-state figures without the startup transient
 dragging them off. Click once, or press the Whole sweep button, to go back.
@@ -302,6 +326,11 @@ overshoots the rail slightly, so the hard clamp is what ships.
 
 `V(0)` is not a legal node reference, so a grounded input is written as a
 literal `0` in the expression.
+
+### Alt is duplicate, not pan
+
+Alt-drag used to pan. Now that there is a dedicated hand tool and middle-drag
+still pans, Alt-drag is free for the more useful gesture of dragging off a copy.
 
 ## Known limits
 

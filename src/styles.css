@@ -248,6 +248,7 @@ svg.sheet:focus-visible { outline-offset: -3px; }
 .grid-major { fill: var(--grid-major); }
 .wire { stroke: var(--wire); stroke-width: 2; stroke-linecap: round; fill: none; }
 .wire.is-selected { stroke: var(--probe); stroke-width: 3.5; }
+.wire-handle { fill: var(--panel); stroke: var(--probe); stroke-width: 2; }
 .part-path { stroke: var(--wire); stroke-width: 2; fill: none; stroke-linejoin: round; stroke-linecap: round; }
 .part-path.is-filled { fill: var(--wire); }
 .part.is-selected .part-path { stroke: var(--probe); }
@@ -266,6 +267,8 @@ svg.sheet:focus-visible { outline-offset: -3px; }
 .sel-box { fill: none; stroke: var(--probe); stroke-width: 1.5; stroke-dasharray: 5 4; }
 .band { fill: var(--accent-soft); fill-opacity: .5; stroke: var(--accent); stroke-width: 1; stroke-dasharray: 4 3; }
 .preview { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 4 4; fill: none; }
+.caret path { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+.caret circle { fill: var(--accent); }
 .ghost { opacity: .4; }
 .probe { fill: none; stroke: var(--probe); stroke-width: 2.5; }
 .probe-ghost { opacity: .5; }
@@ -349,7 +352,7 @@ textarea { line-height: 1.55; resize: vertical; }
 }
 .legend-item[aria-pressed="true"] { background: var(--panel); color: var(--ink); }
 .legend-item.is-off { opacity: .45; text-decoration: line-through; }
-.swatch { width: 12px; height: 12px; border-radius: 2px; flex: none; }
+.swatch { width: 22px; height: 10px; flex: none; overflow: visible; }
 .legend-value { color: var(--ink-soft); }
 .legend-item.is-off .legend-value { color: inherit; }
 
@@ -457,6 +460,53 @@ textarea { line-height: 1.55; resize: vertical; }
   border-bottom: 1px solid var(--rule); font-family: var(--mono);
 }
 .result-table thead th { font-family: var(--sans); font-size: .78rem; color: var(--ink-soft); }
+
+/* --------------------------------------------------------------- dialog */
+
+dialog {
+  /* A dialog sizes to its content, so auto-fit columns would collapse to one
+     without an explicit width to fit into. */
+  width: min(940px, 92vw);
+  max-width: min(940px, 92vw);
+  max-height: 86vh;
+  padding: 0;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 48px rgba(0,0,0,.28);
+}
+dialog::backdrop { background: rgba(10, 14, 18, .45); }
+.dialog-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--rule);
+  position: sticky; top: 0; background: var(--panel);
+}
+.dialog-head h2 { margin: 0; font-size: 1rem; }
+.dialog-body { padding: var(--sp-4); overflow-y: auto; }
+.shortcut-cols {
+  display: grid; gap: var(--sp-5);
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+.shortcut-cols h3 {
+  margin: 0 0 var(--sp-2);
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-soft);
+}
+dl.shortcuts { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: var(--sp-2) var(--sp-3); font-size: .85rem; }
+dl.shortcuts dt { white-space: nowrap; color: var(--ink-soft); }
+dl.shortcuts dd { margin: 0; }
+dl.shortcuts kbd {
+  font-family: var(--mono); font-size: .75rem; opacity: 1;
+  padding: 1px 5px; border: 1px solid var(--rule); border-radius: 3px;
+  background: var(--bg);
+}
+
+/* ----------------------------------------------------------- lab progress */
+
+.lab-progress { font-size: .8rem; color: var(--ok); margin: 0 0 var(--sp-3); font-weight: 600; }
+.lab-tally { font-size: .78rem; color: var(--ink-soft); font-weight: 400; font-family: var(--mono); }
 
 /* --------------------------------------------------------------- footer */
 
