@@ -25,6 +25,9 @@ with no configuration; `base` is set to `./` so it works from a subdirectory.
 
 ## Deploying to GitHub Pages
 
+The repository is `Q-Circuits`; `base` is `./`, so the app runs from whatever
+path it is served at and the `homepage` field is documentation only.
+
 Push to `main`. `.github/workflows/deploy.yml` builds the site and publishes it
 as a Pages artifact. In the repository settings, set Pages → Source to
 **GitHub Actions** once; nothing else is needed.
@@ -76,13 +79,19 @@ elbow along its original axis, so the schematic never ends up full of diagonals.
 A wire that is itself selected moves whole instead of stretching.
 
 **Move versus drag.** A plain drag keeps the wiring: attached ends follow and
-stretch. **Shift-drag moves the part and leaves every wire exactly where it
-is** — the way KiCad's Move differs from its Drag. Because connectivity is
-decided by geometry, a part slid along a wire stays connected to it, which
-makes Shift-drag the right gesture for adjusting spacing along a bus without
-disturbing the run. A pin that leaves its wire really does come off; the
-validator flags it as a dangling node rather than letting it pass quietly.
-Shift plus the arrow keys does the same thing.
+stretch. **Command-drag, or Control-drag, moves the part and leaves every wire
+exactly where it is** — the way KiCad's Move differs from its Drag. Because
+connectivity is decided by geometry, a part slid *along* a wire stays connected
+to it, which makes this the right gesture for adjusting spacing on a bus. A pin
+that leaves its wire genuinely comes off, and the sheet marks it.
+
+Shift is not this modifier. Shift means "add to the selection", and nothing
+else; see the note below.
+
+**Broken connections are shown on the drawing.** An unconnected pin is drawn as
+a filled red circle and a wire end touching nothing gets a dashed red ring, so a
+detached move that pulled something loose is obvious where it happened rather
+than only in the messages under the parts table.
 
 **Wire editing.** Select a wire and drag either end to reroute it. Ends resting
 on a pin are left alone, so grabbing near a part moves the part rather than
@@ -335,6 +344,19 @@ overshoots the rail slightly, so the hard clamp is what ships.
 
 `V(0)` is not a legal node reference, so a grounded input is written as a
 literal `0` in the expression.
+
+### One modifier, one meaning
+
+Detaching was briefly bound to Shift, which was a mistake worth recording.
+Shift already meant "add to the selection", so shift-dragging a part that was
+not yet selected first added it to the selection and then dragged *everything
+selected*, wires left behind — two parts moving when the user grabbed one, and
+a floating wire run left in the middle of the sheet. It also clashed with Shift
+as the larger-step modifier for the arrow keys.
+
+Modifiers now do exactly one thing each: **Shift** extends the selection and
+takes bigger steps, **Alt** drags off a copy, **Command or Control** moves
+without the wires.
 
 ### Alt is duplicate, not pan
 

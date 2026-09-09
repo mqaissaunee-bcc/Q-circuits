@@ -437,7 +437,7 @@ check("a selected wire moves whole instead of stretching",
   detached.dy1 === 40 && detached.dy2 === 40, JSON.stringify(detached));
 await page.evaluate(() => window.__spiceLab.store.undo());
 
-// Shift-drag slides a part without disturbing the wiring
+// Cmd/Ctrl-drag slides a part without disturbing the wiring
 const slid = await page.evaluate(() => {
   const S = window.__spiceLab.store;
   const r1 = S.state.comps.find((c) => c.label === "R1");
@@ -452,8 +452,8 @@ const slid = await page.evaluate(() => {
     warnings: [...document.querySelectorAll("#checks li")].map((li) => li.textContent.trim())
   };
 });
-check("shift-move leaves every wire exactly where it was", slid.wiresUnchanged);
-check("shift-move adds no elbow segments", slid.wireCount === 5, `${slid.wireCount} wires`);
+check("a detached move leaves every wire exactly where it was", slid.wiresUnchanged);
+check("a detached move adds no elbow segments", slid.wireCount === 5, `${slid.wireCount} wires`);
 // Sliding along a wire keeps the pin sitting on it connected — the top pin
 // stays on node 1 — but a pin that leaves its wire genuinely comes off, and
 // that has to be visible rather than silent.
@@ -497,6 +497,44 @@ check("Alt-drag leaves a copy behind", dupAfter.count === dupBefore + 1,
   `${dupBefore} → ${dupAfter.count}`);
 check("the copy gets its own designator", new Set(dupAfter.labels).size === dupAfter.labels.length,
   dupAfter.labels.join(","));
+
+// Shift must mean one thing: add to the selection. Overloading it meant a
+// shift-drag on an unselected part silently dragged everything selected.
+const shiftBehaviour = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  document.getElementById("labSelect").value = "divider";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+  const [a, b] = S.state.comps;
+  S.selection = new Set([a.id]);
+  return { start: S.selection.size, aId: a.id, bId: b.id };
+});
+const shiftBox = await boxOf(page, "svg.sheet");
+const posOf = await page.evaluate((id) => {
+  const S = window.__spiceLab.store;
+  const c = S.state.comps.find((k) => k.id === id);
+  const vb = document.querySelector("svg.sheet").getAttribute("viewBox").split(" ").map(Number);
+  return { x: c.x, y: c.y, vb, wires: JSON.parse(JSON.stringify(S.state.wires)) };
+}, shiftBehaviour.bId);
+const pt = {
+  x: shiftBox.x + ((posOf.x - posOf.vb[0]) / posOf.vb[2]) * shiftBox.width,
+  y: shiftBox.y + ((posOf.y + 30 - posOf.vb[1]) / posOf.vb[3]) * shiftBox.height
+};
+await page.keyboard.down("Shift");
+await page.mouse.move(pt.x, pt.y);
+await page.mouse.down();
+await page.mouse.move(pt.x + 60, pt.y + 40, { steps: 6 });
+await page.mouse.up();
+await page.keyboard.up("Shift");
+await page.waitForTimeout(200);
+const afterShift = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  return { selected: S.selection.size, wires: JSON.stringify(S.state.wires) };
+});
+check("shift-drag adds to the selection rather than detaching",
+  afterShift.selected === 2, `${afterShift.selected} selected`);
+check("shift-drag still drags the wiring along",
+  afterShift.wires !== JSON.stringify(posOf.wires));
+await page.evaluate(() => { while (window.__spiceLab.store.canUndo()) window.__spiceLab.store.undo(); });
 
 /* --------------------------------------------- traces, help, progress ---- */
 
@@ -560,6 +598,36 @@ check("passing every check records the lab", progress.after === true);
 check("the passed lab is ticked in the list", progress.option.includes("\u2713"), progress.option);
 check("the lab panel shows when it was passed", /Passed on/.test(progress.banner), progress.banner);
 check("the tally counts passed labs", /1 of 5 passed/.test(progress.tally), progress.tally);
+
+// Broken connections have to be visible on the drawing, not only in the text
+console.log("\n— showing broken connections —");
+const openMarkers = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  document.getElementById("labSelect").value = "divider";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+  const clean = {
+    pins: document.querySelectorAll("svg.sheet .pin.is-open").length,
+    ends: document.querySelectorAll("svg.sheet .wire-open").length
+  };
+  const r1 = S.state.comps.find((c) => c.label === "R1");
+  S.selection = new Set([r1.id]);
+  S.moveSelection(-80, 0, { detach: true });
+  window.__spiceLab.refresh();
+  return {
+    clean,
+    broken: {
+      pins: document.querySelectorAll("svg.sheet .pin.is-open").length,
+      ends: document.querySelectorAll("svg.sheet .wire-open").length
+    }
+  };
+});
+check("a correctly wired circuit shows no broken-connection markers",
+  openMarkers.clean.pins === 0 && openMarkers.clean.ends === 0, JSON.stringify(openMarkers.clean));
+check("pins left unconnected are marked on the sheet", openMarkers.broken.pins >= 2,
+  `${openMarkers.broken.pins} open pins`);
+check("wire ends touching nothing are marked on the sheet", openMarkers.broken.ends >= 1,
+  `${openMarkers.broken.ends} open wire ends`);
+await page.evaluate(() => window.__spiceLab.store.undo());
 
 /* ------------------------------------------------- pan, zoom area, text */
 

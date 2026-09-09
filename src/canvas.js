@@ -250,9 +250,14 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   function drawJunctions() {
     const g = el("g", { "aria-hidden": "true" }, svg);
     net.degree.forEach((deg, k) => {
-      if (deg < 3) return;
       const [x, y] = k.split(",").map(Number);
-      el("circle", { cx: x, cy: y, r: 3.4, class: "junction" }, g);
+      if (deg >= 3) {
+        el("circle", { cx: x, cy: y, r: 3.4, class: "junction" }, g);
+      } else if (deg === 1) {
+        // A wire end touching nothing. Common while drawing, but a floating
+        // run left behind by a move is otherwise easy to miss.
+        el("circle", { cx: x, cy: y, r: 4.5, class: "wire-open" }, g);
+      }
     });
   }
 
@@ -270,7 +275,11 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
         el("path", { d, class: fills.includes(i) ? "part-path is-filled" : "part-path" }, grp);
       });
 
-      pinsOf(c).forEach((p) => el("circle", { cx: p.x, cy: p.y, r: 2.6, class: "pin" }, g));
+      pinsOf(c).forEach((p, i) => {
+        const node = net.pinNode.get(`${c.id}:${i}`);
+        const alone = node !== 0 && (net.pinCount.get(node) || 0) < 2;
+        el("circle", { cx: p.x, cy: p.y, r: alone ? 4.5 : 2.6, class: alone ? "pin is-open" : "pin" }, g);
+      });
 
       if (!def.noLabel) {
         const t = textAnchor(c);
@@ -550,13 +559,10 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       return;
     }
 
-    // Shift on something already selected starts a detached move rather than
-    // toggling it out of the selection; the toggle still happens if the
-    // pointer never moves, so shift-click keeps working.
-    const shiftOnSelected = evt.shiftKey && store.selection.has(hit.id);
-    if (evt.shiftKey && !shiftOnSelected) {
-      store.selection.add(hit.id);
-    } else if (!evt.shiftKey && !store.selection.has(hit.id)) {
+    if (evt.shiftKey) {
+      if (store.selection.has(hit.id)) store.selection.delete(hit.id);
+      else store.selection.add(hit.id);
+    } else if (!store.selection.has(hit.id)) {
       store.selection = new Set([hit.id]);
     }
     onSelectionChange?.();
@@ -573,10 +579,11 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       }
     }
 
-    // Shift detaches: the parts move and every wire stays exactly where it is.
-    // Useful for sliding a part along a bus without disturbing the run, which
-    // still leaves it connected because connectivity is decided by geometry.
-    const detach = evt.shiftKey;
+    // Command or Control detaches: the parts move and every wire stays exactly
+    // where it is. Shift is not used for this — it already means "add to the
+    // selection", and overloading it meant shift-dragging an unselected part
+    // quietly added it to the selection and dragged everything at once.
+    const detach = evt.metaKey || evt.ctrlKey;
     if (detach) say("Moving without dragging the wires.");
 
     store.begin();
@@ -584,7 +591,6 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       mode: "move",
       duplicating,
       detach,
-      pendingToggle: shiftOnSelected ? hit.id : null,
       attached: (detach ? [] : store.attachedWireEnds(store.selectedComps())).map((a) => ({
         ...a,
         x: a.end === 1 ? a.wire.x1 : a.wire.x2,
@@ -707,14 +713,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     if (gesture.mode === "move") {
       if (gesture.moved) store.squareUpAttached(gesture.attached);
       if (gesture.moved || gesture.duplicating) store.commit("move");
-      else {
-        store.pendingSnapshot = null;
-        // A shift-click that never turned into a drag is still a toggle.
-        if (gesture.pendingToggle !== null) {
-          store.selection.delete(gesture.pendingToggle);
-          onSelectionChange?.();
-        }
-      }
+      else store.pendingSnapshot = null;
     }
 
     gesture = null;
