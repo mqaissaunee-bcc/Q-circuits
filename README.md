@@ -48,7 +48,11 @@ Four things that usually break WASM projects on Pages, and why they don't here:
   warning and its 100 MiB hard block. Pages gzips JavaScript in transit, so a
   cold load pulls about 5.4 MB, and the filename is content-hashed so it caches
   until the next build.
-- **Jekyll is disabled.** `public/.nojekyll` is copied into every build.
+- **Jekyll is disabled.** The workflow writes `dist/.nojekyll` after the build.
+  It used to live at `public/.nojekyll`, but an empty dotfile is invisible in
+  Finder and went missing every time the project was copied by hand, so it is
+  generated in CI instead. The favicon is inlined in `index.html` for the same
+  reason, which removes the `public/` folder altogether.
 
 The build job fails loudly if any of that regresses — a missing `.nojekyll`, an
 engine chunk over 50 MiB, or absolute asset paths that would 404 on a project
@@ -210,7 +214,7 @@ checks that run a real simulation and report against a tolerance.
 ## Layout
 
 ```
-index.html          app shell
+index.html          app shell, with the favicon inlined
 src/
   parts.js          part library: symbols, pin geometry, fields, netlist emitters
   netlist.js        union-find connectivity, netlist assembly, validation, units
