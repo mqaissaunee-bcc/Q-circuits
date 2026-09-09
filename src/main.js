@@ -201,11 +201,11 @@ document.addEventListener("keydown", (evt) => {
   if (evt.key === "Delete" || evt.key === "Backspace") { evt.preventDefault(); $("btnDelete").click(); return; }
   if (evt.key.startsWith("Arrow") && store.selection.size) {
     evt.preventDefault();
-    const d = 20;
+    const d = evt.shiftKey ? 100 : 20;
     const map = { ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, -d], ArrowDown: [0, d] };
     const [dx, dy] = map[evt.key];
-    store.moveSelection(dx, dy, { detach: evt.shiftKey });
-    say(evt.shiftKey ? "Selection moved, wires left in place." : "Selection moved.");
+    store.moveSelection(dx, dy);
+    say("Selection moved.");
   }
 });
 

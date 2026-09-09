@@ -254,6 +254,10 @@ svg.sheet:focus-visible { outline-offset: -3px; }
 .part.is-selected .part-path { stroke: var(--probe); }
 .part.is-selected .part-path.is-filled { fill: var(--probe); }
 .pin { fill: var(--panel); stroke: var(--wire); stroke-width: 1.5; }
+/* An unconnected pin or a wire end touching nothing: the drawing should say so
+   where the problem is, not only in the messages under the parts table. */
+.pin.is-open { fill: var(--danger-soft); stroke: var(--danger); stroke-width: 2; }
+.wire-open { fill: none; stroke: var(--danger); stroke-width: 2; stroke-dasharray: 2.5 2.5; }
 .junction { fill: var(--wire); }
 .part-label { font-family: var(--mono); font-size: 12px; fill: var(--ink); }
 .part-value { font-family: var(--mono); font-size: 11px; fill: var(--ink-soft); }
