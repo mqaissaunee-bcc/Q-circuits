@@ -32,6 +32,7 @@
       <button type="button" id="btnNew" class="ghost">New</button>
       <button type="button" id="btnOpen" class="ghost">Open</button>
       <button type="button" id="btnSave" class="ghost">Save</button>
+      <button type="button" id="btnLink" class="ghost">Copy link</button>
       <input type="file" id="fileInput" accept=".json,application/json" class="sr-only" tabindex="-1">
     </div>
   </div>
@@ -63,16 +64,35 @@
 
 <main class="workspace">
 
-  <section class="panel sheet-panel" id="sheet-region" aria-label="Schematic sheet">
+  <section class="panel sheet-panel" id="sheet-region" aria-labelledby="sheetHead">
+    <h2 id="sheetHead">
+      Schematic
+      <span class="head-actions">
+        <button type="button" id="btnPngSheet" class="ghost">Export PNG</button>
+      </span>
+    </h2>
     <div class="sheet-host" id="sheetHost"></div>
     <p class="hint-bar">
       <span>Pick a part, then click the sheet to place it.</span>
       <span>Drag on empty space to box-select.</span>
       <span>Alt-drag or middle-drag to pan, scroll to zoom.</span>
+      <span>Double-click a value to edit it in place.</span>
     </p>
   </section>
 
   <div class="side">
+
+    <section class="panel" aria-labelledby="libHead">
+      <h2 id="libHead">
+        My circuits
+        <span class="head-actions">
+          <button type="button" id="btnStore" class="ghost">Save current</button>
+        </span>
+      </h2>
+      <div class="panel-body">
+        <ul class="library" id="libraryList"></ul>
+      </div>
+    </section>
 
     <section class="panel" aria-labelledby="labHead">
       <h2 id="labHead">Lab</h2>
@@ -161,6 +181,7 @@
           <button type="button" data-mode="mag" aria-pressed="false">Magnitude</button>
           <button type="button" data-mode="phase" aria-pressed="false">Phase</button>
         </span>
+        <button type="button" id="btnPngPlot" class="ghost" disabled>Export PNG</button>
         <button type="button" id="btnCsv" class="ghost" disabled>Export CSV</button>
       </span>
     </h2>

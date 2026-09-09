@@ -213,7 +213,22 @@ kbd {
 /* ---------------------------------------------------------------- sheet */
 
 .sheet-panel { padding: 0; overflow: hidden; }
-.sheet-host { display: block; }
+.sheet-host { display: block; position: relative; }
+
+/* Parked over the text it replaces, so editing happens where the eye already is. */
+.inline-edit {
+  position: absolute;
+  z-index: 5;
+  min-height: 30px;
+  padding: 2px var(--sp-2);
+  font-family: var(--mono);
+  font-size: .84rem;
+  color: var(--ink);
+  background: var(--panel);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
 svg.sheet {
   display: block; width: 100%; height: auto;
   aspect-ratio: 1400 / 900;
@@ -327,6 +342,52 @@ textarea { line-height: 1.55; resize: vertical; }
 .swatch { width: 12px; height: 12px; border-radius: 2px; flex: none; }
 .legend-value { color: var(--ink-soft); }
 .legend-item.is-off .legend-value { color: inherit; }
+
+/* ------------------------------------------------------------ my circuits */
+
+.library { list-style: none; margin: 0; padding: 0; font-size: .85rem; }
+.library li {
+  display: flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.library li:last-child { border-bottom: none; }
+.library .lib-name {
+  flex: 1 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.library .lib-when { font-size: .74rem; color: var(--ink-soft); font-family: var(--mono); }
+.library button { min-height: 34px; padding: var(--sp-1) var(--sp-3); font-size: .78rem; border-color: var(--rule); }
+.library .empty { color: var(--ink-soft); padding: var(--sp-2) 0; border: none; }
+
+/* -------------------------------------------------------- error reporting */
+
+.engine-error {
+  border-left: 3px solid var(--danger);
+  background: var(--danger-soft);
+  padding: var(--sp-3);
+  margin-top: var(--sp-3);
+  font-size: .86rem;
+}
+.engine-error h3 { margin: 0 0 var(--sp-2); font-size: .9rem; color: var(--danger); }
+.engine-error p { margin: 0 0 var(--sp-2); }
+.engine-error p:last-child { margin-bottom: 0; }
+.engine-error .culprit {
+  font-family: var(--mono); font-size: .8rem;
+  background: var(--panel); border: 1px solid var(--rule);
+  padding: var(--sp-2); border-radius: var(--radius);
+  overflow-x: auto; white-space: pre;
+}
+.engine-error details { border: none; margin-top: var(--sp-2); }
+.engine-error summary {
+  padding: 0; min-height: 32px; font-size: .8rem; font-weight: 600;
+  color: var(--ink-soft);
+}
+.engine-error pre {
+  font-family: var(--mono); font-size: .76rem; line-height: 1.5;
+  white-space: pre-wrap; margin: var(--sp-2) 0 0;
+  color: var(--ink-soft);
+}
 
 /* ---------------------------------------------------------- measurements */
 

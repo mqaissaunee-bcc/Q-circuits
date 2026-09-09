@@ -12,6 +12,7 @@ import { makeComp } from "./parts.js";
 const STORAGE_KEY = "q-circuits-v1";
 const LEGACY_STORAGE_KEY = "spice-lab-v1";     // autosave from before the rename
 const DOC_FORMAT = "q-circuits-circuit";
+const LIBRARY_KEY = "q-circuits-library-v1";
 const LEGACY_DOC_FORMATS = new Set([DOC_FORMAT, "spice-lab-circuit"]);
 const HISTORY_LIMIT = 60;
 
@@ -39,6 +40,23 @@ export class Store {
     this.clipboard = null;
     this.listeners = new Set();
     this.pendingSnapshot = null;
+    this.baseline = null;   // serialised state as last saved or loaded
+  }
+
+  /* ------------------------------------------------- unsaved-work tracking */
+
+  /** Mark the current sheet as the reference point for "has this changed?". */
+  markClean() { this.baseline = JSON.stringify(this.state); }
+
+  /**
+   * True when the sheet differs from the last save or load. Used to warn
+   * before anything replaces it — opening a lab used to discard a student's
+   * work outright, with the only recovery being an undo they had no reason to
+   * know about.
+   */
+  isDirty() {
+    if (this.baseline === null) return this.state.comps.length > 0;
+    return JSON.stringify(this.state) !== this.baseline;
   }
 
   /* ------------------------------------------------------------ plumbing */
@@ -239,6 +257,7 @@ export class Store {
       s.title = "Untitled circuit";
     }, "clear");
     this.selection.clear();
+    this.markClean();
   }
 
   /* -------------------------------------------------------------- probes */
@@ -254,6 +273,60 @@ export class Store {
 
   hasProbe(kind, ref) {
     return this.state.probes.some((p) => p.kind === kind && p.ref === ref);
+  }
+
+  /* ------------------------------------------------------------- library */
+
+  readLibrary() {
+    try {
+      const raw = localStorage.getItem(LIBRARY_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch { return {}; }
+  }
+
+  writeLibrary(lib) {
+    try {
+      localStorage.setItem(LIBRARY_KEY, JSON.stringify(lib));
+      return true;
+    } catch { return false; }
+  }
+
+  /** Names in the library, most recently saved first. */
+  listSaved() {
+    const lib = this.readLibrary();
+    return Object.keys(lib)
+      .map((name) => ({ name, savedAt: lib[name].savedAt || "" }))
+      .sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt)));
+  }
+
+  saveToLibrary(name) {
+    const key = String(name || "").trim();
+    if (!key) return false;
+    const lib = this.readLibrary();
+    lib[key] = { savedAt: new Date().toISOString(), doc: JSON.parse(this.toDocument()) };
+    if (!this.writeLibrary(lib)) return false;
+    this.state.title = key;
+    this.markClean();
+    this.save();
+    this.emit("library");
+    return true;
+  }
+
+  openFromLibrary(name) {
+    const entry = this.readLibrary()[name];
+    if (!entry) return false;
+    this.loadDocument(JSON.stringify(entry.doc));
+    return true;
+  }
+
+  deleteFromLibrary(name) {
+    const lib = this.readLibrary();
+    if (!(name in lib)) return false;
+    delete lib[name];
+    this.writeLibrary(lib);
+    this.emit("library");
+    return true;
   }
 
   /* --------------------------------------------------------- persistence */
@@ -274,6 +347,7 @@ export class Store {
       this.state.analysis = { ...DEFAULT_ANALYSIS, ...(parsed.state.analysis || {}) };
       this.state.probes = parsed.state.probes || [];
       this.uid = parsed.uid || 1;
+      this.markClean();
       return true;
     } catch { return false; }
   }
@@ -303,6 +377,7 @@ export class Store {
     this.selection.clear();
     this.uid = Math.max(0, ...this.state.comps.map((c) => c.id || 0),
                            ...this.state.wires.map((w) => w.id || 0)) + 1;
+    this.markClean();
   }
 
   /** Replace the sheet with a circuit built by a lab definition. */
@@ -316,5 +391,6 @@ export class Store {
       s.analysis = { ...DEFAULT_ANALYSIS, ...(circuit.analysis || {}) };
     }, "load");
     this.selection.clear();
+    this.markClean();
   }
 }

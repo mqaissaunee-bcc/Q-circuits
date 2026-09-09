@@ -13,6 +13,9 @@ import { createCanvas } from "./canvas.js";
 import { createScope } from "./scope.js";
 import { runNetlist, engineReady } from "./engine.js";
 import { LABS, labById, runChecks } from "./labs.js";
+import { explainEngineError } from "./errors.js";
+import { shareUrl, decodeCircuit, clearHash } from "./share.js";
+import { exportSvg, exportCanvas } from "./export-png.js";
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -24,7 +27,16 @@ const canvas = createCanvas({
   host: $("sheetHost"),
   store,
   onStatus: say,
-  onSelectionChange: () => { renderInspector(); renderPartsTable(lastNet()); }
+  onSelectionChange: () => { renderInspector(); renderPartsTable(lastNet()); },
+  // Parts whose only settings are dropdowns cannot be edited in a text box,
+  // so send those to the inspector rather than opening a field that lies.
+  onNeedsInspector: (comp) => {
+    store.selection = new Set([comp.id]);
+    refresh();
+    const first = $("inspector").querySelector("select, input");
+    if (first) first.focus();
+    say(`${comp.label} has no free-text value. Use the Selected part panel.`);
+  }
 });
 
 const scope = createScope({ host: $("scopeHost"), measureHost: $("measureHost"), onStatus: say });
@@ -32,6 +44,16 @@ const scope = createScope({ host: $("scopeHost"), measureHost: $("measureHost"),
 let currentLab = null;
 let lastResult = null;
 let running = false;
+
+/**
+ * Anything that replaces the whole sheet asks first when there is unsaved work.
+ * Opening a lab used to wipe a student's circuit outright.
+ */
+function confirmReplace(what) {
+  if (!store.isDirty()) return true;
+  const name = store.state.title || "this circuit";
+  return confirm(`${name} has changes you have not saved.\n\n${what} will replace it. Save it under My circuits first if you want to keep it.\n\nReplace anyway?`);
+}
 
 /* ------------------------------------------------------------- palette */
 
@@ -361,9 +383,9 @@ async function run() {
     note.textContent = `${result.numPoints} point${result.numPoints === 1 ? "" : "s"} · ${result.traces.length} vector${result.traces.length === 1 ? "" : "s"}.`;
     say(`Simulation finished with ${result.numPoints} points.`);
   } catch (e) {
-    showRunError(e.message || String(e));
+    showRunError(e.message || String(e), $("netOut").value);
     note.textContent = engineReady() ? "Engine loaded." : "The engine did not load.";
-    say("The simulation failed. See the message under the Run button.");
+    say("The simulation did not finish. There is an explanation under the Run button.");
   } finally {
     running = false;
     btn.disabled = false;
@@ -374,6 +396,7 @@ function applyResult(result) {
   const filtered = filterToProbes(result);
   scope.setResult(filtered);
   $("btnCsv").disabled = false;
+  $("btnPngPlot").disabled = false;
 
   const modes = $("acModes");
   modes.hidden = filtered.kind !== "complex";
@@ -433,16 +456,44 @@ function renderOpResults(result) {
   host.appendChild(table);
 }
 
-function showRunError(message) {
+function showRunError(message, netlist) {
   const host = $("runError");
   host.replaceChildren();
-  const ul = document.createElement("ul");
-  ul.className = "msg-list";
-  const li = document.createElement("li");
-  li.className = "error";
-  li.textContent = message;
-  ul.appendChild(li);
-  host.appendChild(ul);
+
+  const info = explainEngineError(message, netlist);
+  const box = document.createElement("div");
+  box.className = "engine-error";
+  box.setAttribute("role", "alert");
+
+  const h = document.createElement("h3");
+  h.textContent = info.title;
+  box.appendChild(h);
+
+  const fix = document.createElement("p");
+  fix.textContent = info.fix;
+  box.appendChild(fix);
+
+  if (info.line) {
+    const p = document.createElement("p");
+    p.textContent = `Netlist line ${info.line.number}:`;
+    box.appendChild(p);
+    const pre = document.createElement("div");
+    pre.className = "culprit";
+    pre.textContent = info.line.text;
+    box.appendChild(pre);
+  }
+
+  if (info.raw) {
+    const det = document.createElement("details");
+    const sum = document.createElement("summary");
+    sum.textContent = "Show what ngspice said";
+    const pre = document.createElement("pre");
+    pre.textContent = info.raw;
+    det.append(sum, pre);
+    box.appendChild(det);
+  }
+
+  host.appendChild(box);
 }
 
 $("btnRun").addEventListener("click", run);
@@ -460,6 +511,26 @@ $("acModes").addEventListener("click", (evt) => {
   scope.setMode(b.dataset.mode);
   setAcMode(b.dataset.mode);
   say(`Plot showing ${b.textContent}.`);
+});
+
+$("btnPngSheet").addEventListener("click", async () => {
+  try {
+    await exportSvg(canvas.svg, `${slug(store.state.title)}-schematic.png`, canvas.contentBox());
+    say("Schematic exported as a PNG.");
+  } catch (e) {
+    say(`The schematic could not be exported: ${e.message}`);
+  }
+});
+
+$("btnPngPlot").addEventListener("click", async () => {
+  const plot = document.querySelector(".scope-canvas");
+  if (!plot) { say("There is no plot to export yet."); return; }
+  try {
+    await exportCanvas(plot, `${slug(store.state.title)}-waveforms.png`);
+    say("Waveform plot exported as a PNG.");
+  } catch (e) {
+    say(`The plot could not be exported: ${e.message}`);
+  }
 });
 
 $("btnCsv").addEventListener("click", () => {
@@ -480,6 +551,12 @@ LABS.forEach((l) => {
 
 labSelect.addEventListener("change", () => {
   const lab = labById(labSelect.value);
+
+  if (lab && !confirmReplace(`Opening the ${lab.title} lab`)) {
+    labSelect.value = currentLab ? currentLab.id : "";
+    return;
+  }
+
   currentLab = lab;
   $("checkResults").replaceChildren();
 
@@ -494,6 +571,12 @@ labSelect.addEventListener("change", () => {
   store.loadCircuit(lab.circuit);
   syncAnalysisInputs();
   canvas.fit();
+  renderLabPanel(lab);
+  say(`${lab.title} loaded.`);
+});
+
+/** Fill the lab panel with a lab's brief and tasks. */
+function renderLabPanel(lab) {
   $("labSummary").textContent = lab.summary;
   const ol = $("labTasks");
   ol.replaceChildren();
@@ -503,8 +586,7 @@ labSelect.addEventListener("change", () => {
     ol.appendChild(li);
   });
   $("btnCheck").disabled = false;
-  say(`${lab.title} loaded.`);
-});
+}
 
 $("btnCheck").addEventListener("click", async () => {
   if (!currentLab || running) return;
@@ -521,14 +603,8 @@ $("btnCheck").addEventListener("click", async () => {
   btn.disabled = false;
 
   if (outcome.error) {
-    const ul = document.createElement("ul");
-    ul.className = "msg-list";
-    const li = document.createElement("li");
-    li.className = "error";
-    li.textContent = outcome.error;
-    ul.appendChild(li);
-    host.appendChild(ul);
-    say("The check could not run because the simulation failed.");
+    showRunError(outcome.error, $("netOut").value);
+    say("The check could not run because the simulation did not finish.");
     return;
   }
 
@@ -562,6 +638,98 @@ $("btnCheck").addEventListener("click", async () => {
   say(`${passed} of ${outcome.results.length} checks passed.`);
 });
 
+/* ------------------------------------------------------- saved circuits */
+
+function renderLibrary() {
+  const list = $("libraryList");
+  list.replaceChildren();
+  const saved = store.listSaved();
+
+  if (!saved.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = "Nothing saved yet. Name your circuit at the top, then use Save current.";
+    list.appendChild(li);
+    return;
+  }
+
+  saved.forEach((entry) => {
+    const li = document.createElement("li");
+
+    const name = document.createElement("span");
+    name.className = "lib-name";
+    name.textContent = entry.name;
+    li.appendChild(name);
+
+    if (entry.savedAt) {
+      const when = document.createElement("span");
+      when.className = "lib-when";
+      when.textContent = new Date(entry.savedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      li.appendChild(when);
+    }
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.textContent = "Open";
+    open.setAttribute("aria-label", `Open ${entry.name}`);
+    open.addEventListener("click", () => {
+      if (!confirmReplace(`Opening ${entry.name}`)) return;
+      if (store.openFromLibrary(entry.name)) {
+        syncAnalysisInputs();
+        canvas.fit();
+        detachLab();
+        say(`${entry.name} opened.`);
+      }
+    });
+    li.appendChild(open);
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "danger";
+    del.textContent = "Delete";
+    del.setAttribute("aria-label", `Delete ${entry.name}`);
+    del.addEventListener("click", () => {
+      if (!confirm(`Delete ${entry.name}? This cannot be undone.`)) return;
+      store.deleteFromLibrary(entry.name);
+      renderLibrary();
+      say(`${entry.name} deleted.`);
+    });
+    li.appendChild(del);
+
+    list.appendChild(li);
+  });
+}
+
+$("btnStore").addEventListener("click", () => {
+  const suggested = store.state.title && store.state.title !== "Untitled circuit"
+    ? store.state.title : "";
+  const name = prompt("Save this circuit as:", suggested);
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) { say("A name is needed to save a circuit."); return; }
+
+  const exists = store.listSaved().some((e) => e.name === trimmed);
+  if (exists && !confirm(`${trimmed} already exists. Replace it?`)) return;
+
+  if (store.saveToLibrary(trimmed)) {
+    $("docTitle").value = trimmed;
+    renderLibrary();
+    say(`Saved as ${trimmed}.`);
+  } else {
+    say("The circuit could not be saved. Browser storage may be full or blocked.");
+  }
+});
+
+/** Step off a lab, since the sheet is no longer that lab's circuit. */
+function detachLab() {
+  labSelect.value = "";
+  currentLab = null;
+  $("labTasks").replaceChildren();
+  $("labSummary").textContent = "";
+  $("checkResults").replaceChildren();
+  $("btnCheck").disabled = true;
+}
+
 /* ------------------------------------------------------------- file I/O */
 
 function download(name, text, type = "application/json") {
@@ -574,17 +742,31 @@ function download(name, text, type = "application/json") {
 
 const slug = (s) => (s || "circuit").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "circuit";
 
+$("btnLink").addEventListener("click", async () => {
+  try {
+    const url = await shareUrl(store.state);
+    try {
+      await navigator.clipboard.writeText(url);
+      say(`Link copied — ${url.length} characters. Anyone who opens it gets this exact circuit.`);
+    } catch {
+      window.prompt("Copy this link:", url);
+    }
+  } catch (e) {
+    say(`The link could not be built: ${e.message}`);
+  }
+});
+
 $("btnNew").addEventListener("click", () => {
-  if (store.state.comps.length && !confirm("Start a new sheet? The current circuit is cleared.")) return;
+  if (!confirmReplace("Starting a new sheet")) return;
   store.clear();
-  labSelect.value = "";
-  labSelect.dispatchEvent(new Event("change"));
+  detachLab();
   say("New sheet.");
 });
 
 $("btnSave").addEventListener("click", () => {
   download(`${slug(store.state.title)}.json`, store.toDocument());
-  say("Circuit saved.");
+  store.markClean();
+  say("Circuit downloaded.");
 });
 
 $("btnOpen").addEventListener("click", () => $("fileInput").click());
@@ -592,18 +774,15 @@ $("btnOpen").addEventListener("click", () => $("fileInput").click());
 $("fileInput").addEventListener("change", async (evt) => {
   const file = evt.target.files?.[0];
   if (!file) return;
+  if (!confirmReplace(`Opening ${file.name}`)) { evt.target.value = ""; return; }
   try {
     store.loadDocument(await file.text());
     syncAnalysisInputs();
     canvas.fit();
-    labSelect.value = "";
-    currentLab = null;
-    $("labTasks").replaceChildren();
-    $("labSummary").textContent = "";
-    $("btnCheck").disabled = true;
+    detachLab();
     say(`${file.name} opened.`);
   } catch (e) {
-    showRunError(e.message);
+    showRunError(e.message, "");
     say("That file could not be opened.");
   }
   evt.target.value = "";
@@ -665,21 +844,54 @@ function renderChecks(msgs) {
   host.appendChild(ul);
 }
 
-store.subscribe(() => refresh());
+store.subscribe((_, reason) => {
+  refresh();
+  if (reason === "library") renderLibrary();
+});
 
 /* ----------------------------------------------------------------- boot */
 
-if (!store.restore() || !store.state.comps.length) {
-  store.state.analysis = { ...DEFAULT_ANALYSIS };
-  store.loadCircuit(LABS[0].circuit);
-  labSelect.value = LABS[0].id;
-  labSelect.dispatchEvent(new Event("change"));
+async function boot() {
+  const restored = store.restore() && store.state.comps.length > 0;
+
+  let shared = null;
+  try {
+    shared = await decodeCircuit();
+  } catch (e) {
+    // A truncated link should not stop the app from opening.
+    setTimeout(() => say(e.message), 0);
+  }
+
+  if (shared) {
+    // Someone followed a link on purpose, so it wins — but not silently over
+    // work that has not been saved anywhere.
+    if (!restored || !store.isDirty() ||
+        confirm("This link contains a circuit.\n\nOpening it replaces what is on your sheet, which has unsaved changes.\n\nOpen the linked circuit?")) {
+      store.loadCircuit(shared);
+      store.state.analysis = { ...DEFAULT_ANALYSIS, ...(shared.analysis || {}) };
+      currentLab = null;
+      setTimeout(() => say(`Opened "${store.state.title}" from a shared link.`), 0);
+    }
+    clearHash();
+  } else if (!restored) {
+    store.state.analysis = { ...DEFAULT_ANALYSIS };
+    store.loadCircuit(LABS[0].circuit);
+    labSelect.value = LABS[0].id;
+    currentLab = LABS[0];
+    renderLabPanel(LABS[0]);
+  }
+
+  syncAnalysisInputs();
+  $("docTitle").value = store.state.title;
+  store.markClean();
+  renderLibrary();
+  refresh();
+  canvas.fit();
+  setTool("select");
 }
-syncAnalysisInputs();
-$("docTitle").value = store.state.title;
-refresh();
-canvas.fit();
-setTool("select");
+
+boot().then(() => { window.__spiceLab.ready = true; });
 
 // exposed for the end-to-end tests
-window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, getResult: () => lastResult };
+window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, decodeCircuit,
+  explainEngineError, ready: false, getResult: () => lastResult };

@@ -8,6 +8,22 @@ import { createServer } from "http";
 import { readFileSync, existsSync, statSync } from "fs";
 import { extname, join, normalize } from "path";
 
+/** Double-click an element, keeping it clear of the sticky toolbar. */
+async function dblclickCentered(page, locator) {
+  await locator.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
+  await page.waitForTimeout(120);
+  await locator.dblclick();
+}
+
+/** Scroll a locator to the top of the viewport and return a fresh box. */
+async function boxOf(page, selector) {
+  await page.evaluate((sel) => {
+    document.querySelector(sel).scrollIntoView({ block: "center", behavior: "instant" });
+  }, selector);
+  await page.waitForTimeout(120);
+  return page.locator(selector).boundingBox();
+}
+
 const ROOT = new URL("../dist/", import.meta.url).pathname;
 const PORT = 5211;
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".wasm": "application/wasm" };
@@ -40,7 +56,7 @@ page.on("console", (m) => { if (m.type() === "error") consoleErrors.push("consol
 page.on("dialog", (d) => d.accept());
 
 await page.goto(`http://localhost:${PORT}/`);
-await page.waitForFunction(() => !!window.__spiceLab, null, { timeout: 20000 });
+await page.waitForFunction(() => !!window.__spiceLab && window.__spiceLab.ready === true, null, { timeout: 20000 });
 
 /* ---------------------------------------------------------------- boot */
 
@@ -144,7 +160,7 @@ const before = await page.evaluate(() => window.__spiceLab.store.state.comps.len
 
 // place a resistor by clicking the sheet
 await page.click('#partTools button[data-tool="R"]');
-const svgBox = await page.locator("svg.sheet").boundingBox();
+const svgBox = await boxOf(page, "svg.sheet");
 await page.mouse.click(svgBox.x + svgBox.width * 0.75, svgBox.y + svgBox.height * 0.25);
 let after = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
 check("clicking the sheet places a part", after === before + 1, `${before} → ${after}`);
@@ -183,9 +199,10 @@ check("rotate advances the angle", rotated === 180, `rot = ${rotated}`);
 
 // box select
 await page.click('#modeTools button[data-tool="select"]');
-await page.mouse.move(svgBox.x + 8, svgBox.y + 8);
+const bandBox = await boxOf(page, "svg.sheet");
+await page.mouse.move(bandBox.x + 8, bandBox.y + 8);
 await page.mouse.down();
-await page.mouse.move(svgBox.x + svgBox.width - 8, svgBox.y + svgBox.height - 8, { steps: 8 });
+await page.mouse.move(bandBox.x + bandBox.width - 8, bandBox.y + bandBox.height - 8, { steps: 8 });
 await page.mouse.up();
 const selCount = await page.evaluate(() => window.__spiceLab.store.selection.size);
 check("box select grabs everything on the sheet", selCount > 4, `${selCount} items`);
@@ -240,9 +257,7 @@ check("transient shows all six measurement columns",
 // drag across the plot to narrow the measurement window.
 // The scope sits below the fold at this viewport, so scroll it into view first
 // or the synthetic mouse events land outside the canvas.
-await page.locator(".scope-canvas").scrollIntoViewIfNeeded();
-await page.waitForTimeout(200);
-const scopeBox = await page.locator(".scope-canvas").boundingBox();
+const scopeBox = await boxOf(page, ".scope-canvas");
 await page.mouse.move(scopeBox.x + scopeBox.width * 0.45, scopeBox.y + scopeBox.height * 0.5);
 await page.mouse.down();
 await page.mouse.move(scopeBox.x + scopeBox.width * 0.75, scopeBox.y + scopeBox.height * 0.5, { steps: 10 });
@@ -371,6 +386,211 @@ const ampChecks = await page.$$eval("#checkResults .check-list li", (els) =>
 check("lab detects the inversion", ampChecks[0].pass, ampChecks[0].text);
 check("lab detects clipping against whatever the rails are set to", ampChecks[1].pass, ampChecks[1].text);
 
+/* --------------------------------------------------------- inline editing */
+
+console.log("\n— inline editing —");
+await page.evaluate(() => {
+  document.getElementById("labSelect").value = "divider";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+});
+await page.waitForTimeout(200);
+await page.click('#modeTools button[data-tool="select"]');
+await boxOf(page, "svg.sheet");
+
+// Address R1 specifically: the first value text on the sheet belongs to V1.
+const r1Id = await page.evaluate(() =>
+  window.__spiceLab.store.state.comps.find((c) => c.label === "R1").id);
+const valueText = page.locator(`svg.sheet [data-edit="value"][data-id="${r1Id}"]`);
+await dblclickCentered(page, valueText);
+const editorOpen = await page.evaluate(() => {
+  const i = document.querySelector(".inline-edit");
+  return i ? { value: i.value, selected: i.selectionEnd - i.selectionStart === i.value.length } : null;
+});
+check("double-clicking a value opens an editor on the sheet", !!editorOpen, editorOpen?.value);
+check("the existing value is preselected for overtyping", !!editorOpen?.selected);
+
+await page.keyboard.type("2.7k");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(200);
+const committed = await page.evaluate(() => ({
+  values: window.__spiceLab.store.state.comps.filter((c) => c.type === "R").map((c) => c.value),
+  netlist: document.getElementById("netOut").value,
+  editorGone: !document.querySelector(".inline-edit")
+}));
+check("Enter commits the new value", committed.values.includes("2.7k"), committed.values.join(","));
+check("the netlist picks the change up immediately", committed.netlist.includes("2.7k"));
+check("the editor closes after committing", committed.editorGone);
+
+// Escape must abandon the edit
+await dblclickCentered(page, valueText);
+await page.keyboard.type("999");
+await page.keyboard.press("Escape");
+await page.waitForTimeout(150);
+const cancelled = await page.evaluate(() => ({
+  values: window.__spiceLab.store.state.comps.filter((c) => c.type === "R").map((c) => c.value),
+  editorGone: !document.querySelector(".inline-edit")
+}));
+check("Escape abandons the edit", !cancelled.values.includes("999") && cancelled.values.includes("2.7k"),
+  cancelled.values.join(","));
+check("the editor closes after cancelling", cancelled.editorGone);
+
+// the label is editable the same way
+const labelText = page.locator(`svg.sheet [data-edit="label"][data-id="${r1Id}"]`);
+await dblclickCentered(page, labelText);
+await page.keyboard.type("Rtop");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(200);
+const relabelled = await page.evaluate(() => ({
+  labels: window.__spiceLab.store.state.comps.map((c) => c.label),
+  netlist: document.getElementById("netOut").value
+}));
+check("labels can be renamed in place", relabelled.labels.includes("Rtop"), relabelled.labels.join(","));
+check("the old designator is gone", !relabelled.labels.includes("R1"), relabelled.labels.join(","));
+check("the renamed part appears in the netlist", /^Rtop /m.test(relabelled.netlist));
+
+// a part whose only setting is a dropdown routes to the inspector instead
+const dropdownOnly = await page.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  S.clear();
+  S.edit(() => { S.addComp("D", 200, 200, "D"); S.addComp("GND", 400, 200, "GND"); }, "t");
+  return S.state.comps[0].id;
+});
+await page.waitForTimeout(150);
+await dblclickCentered(page, page.locator('svg.sheet [data-edit="value"][data-id]').first());
+await page.waitForTimeout(150);
+const routed = await page.evaluate(() => ({
+  noEditor: !document.querySelector(".inline-edit"),
+  selected: window.__spiceLab.store.selection.size === 1,
+  focusInPanel: !!document.getElementById("inspector").contains(document.activeElement)
+}));
+check("a dropdown-only part opens the inspector instead of a text box",
+  routed.noEditor && routed.selected, JSON.stringify(routed));
+
+/* -------------------------------------------------------------- PNG export */
+
+console.log("\n— PNG export —");
+await page.evaluate(() => {
+  document.getElementById("labSelect").value = "rectifier";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+});
+await page.waitForTimeout(200);
+await page.evaluate(async () => { await window.__spiceLab.run(); });
+await page.waitForTimeout(400);
+
+async function grabDownload(selector) {
+  const [download] = await Promise.all([
+    page.waitForEvent("download", { timeout: 20000 }),
+    page.click(selector)
+  ]);
+  const stream = await download.createReadStream();
+  const chunks = [];
+  for await (const c of stream) chunks.push(c);
+  const buf = Buffer.concat(chunks);
+  // PNG signature, then IHDR carries the dimensions
+  const isPng = buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  return { name: download.suggestedFilename(), bytes: buf.length, isPng,
+           width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
+}
+
+const sheetPng = await grabDownload("#btnPngSheet");
+check("the schematic exports a real PNG", sheetPng.isPng, `${sheetPng.bytes} bytes`);
+check("the schematic PNG is exported at print resolution", sheetPng.width > 2000,
+  `${sheetPng.width}×${sheetPng.height}`);
+check("the schematic filename comes from the circuit name",
+  sheetPng.name === "half-wave-rectifier-schematic.png", sheetPng.name);
+
+const plotPng = await grabDownload("#btnPngPlot");
+check("the waveform plot exports a real PNG", plotPng.isPng, `${plotPng.bytes} bytes`);
+check("the plot PNG has sensible dimensions", plotPng.width > 400 && plotPng.height > 200,
+  `${plotPng.width}×${plotPng.height}`);
+check("the plot filename comes from the circuit name",
+  plotPng.name === "half-wave-rectifier-waveforms.png", plotPng.name);
+
+/* ----------------------------------------------------- unsaved-work guard */
+
+console.log("\n— unsaved work —");
+const guard = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  S.loadCircuit({ title: "Guard test", comps: [], wires: [], analysis: {} });
+  const cleanAfterLoad = !S.isDirty();
+  S.edit(() => S.addComp("R", 100, 100, "R"), "t");
+  return { cleanAfterLoad, dirtyAfterEdit: S.isDirty() };
+});
+check("a freshly loaded circuit is not marked as changed", guard.cleanAfterLoad);
+check("editing marks the sheet as changed", guard.dirtyAfterEdit);
+
+// with unsaved work, switching labs must ask before replacing it
+let asked = null;
+const labBeforeGuard = await page.evaluate(() => document.getElementById("labSelect").value);
+page.removeAllListeners("dialog");
+page.on("dialog", (d) => { asked = d.message(); d.dismiss(); });
+await page.selectOption("#labSelect", "rc-lowpass");
+await page.waitForTimeout(250);
+const afterDismiss = await page.evaluate(() => ({
+  parts: window.__spiceLab.store.state.comps.length,
+  selectValue: document.getElementById("labSelect").value
+}));
+check("switching labs with unsaved work asks first", !!asked && /unsaved|not saved/i.test(asked),
+  (asked || "no dialog").split("\n")[0]);
+check("declining keeps the circuit on the sheet", afterDismiss.parts === 1, `${afterDismiss.parts} parts`);
+check("declining reverts the dropdown to the lab already open",
+  afterDismiss.selectValue === labBeforeGuard, `"${afterDismiss.selectValue}" (was "${labBeforeGuard}")`);
+
+page.removeAllListeners("dialog");
+page.on("dialog", (d) => d.accept());
+
+/* --------------------------------------------------------- circuit links */
+
+console.log("\n— shareable links —");
+const link = await page.evaluate(async () => {
+  const { shareUrl, decodeCircuit } = await import("./assets/" +
+    [...document.querySelectorAll("script[type=module]")].map((s) => s.src.split("/").pop())[0]);
+  return null;
+}).catch(() => null);
+
+const roundTripLink = await page.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  document.getElementById("labSelect").value = "rectifier";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+  const before = { title: S.state.title, comps: S.state.comps.length, wires: S.state.wires.length, probes: S.state.probes.length };
+  const url = await window.__spiceLab.shareUrl(S.state);
+  const decoded = await window.__spiceLab.decodeCircuit(new URL(url).hash);
+  return { before, len: url.length, hash: new URL(url).hash.slice(0, 3),
+           after: { title: decoded.title, comps: decoded.comps.length, wires: decoded.wires.length, probes: decoded.probes.length } };
+});
+check("a circuit survives a round trip through a URL",
+  JSON.stringify(roundTripLink.before) === JSON.stringify(roundTripLink.after),
+  JSON.stringify(roundTripLink.after));
+check("the link is compressed", roundTripLink.hash === "#c=", roundTripLink.hash);
+check("the link is short enough to paste anywhere", roundTripLink.len < 2000, `${roundTripLink.len} characters`);
+
+const damaged = await page.evaluate(async () => {
+  try {
+    await window.__spiceLab.decodeCircuit("#c=thisIsNotValidPayload");
+    return "accepted";
+  } catch (e) { return e.message; }
+});
+check("a truncated link gives a readable explanation", /cut short/i.test(damaged), damaged.slice(0, 80));
+
+// open a link in a fresh page and confirm it simulates
+const sharedUrl = await page.evaluate(async () => window.__spiceLab.shareUrl(window.__spiceLab.store.state));
+const page2 = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+page2.on("dialog", (d) => d.accept());
+await page2.goto(sharedUrl);
+await page2.waitForFunction(() => !!window.__spiceLab && window.__spiceLab.ready === true, null, { timeout: 20000 });
+const opened = await page2.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  await window.__spiceLab.run();
+  const r = window.__spiceLab.getResult();
+  return { title: S.state.title, parts: S.state.comps.length,
+           hash: window.location.hash, points: r ? r.numPoints : 0 };
+});
+check("following a link opens that circuit", opened.title === "Half-wave rectifier" && opened.parts === 4,
+  `${opened.title}, ${opened.parts} parts`);
+check("the link payload is cleared from the address bar", opened.hash === "", `"${opened.hash}"`);
+check("a shared circuit simulates in the new tab", opened.points > 100, `${opened.points} points`);
+await page2.close();
+
 /* ---------------------------------------------------- save / open cycle */
 
 console.log("\n— documents —");
@@ -417,10 +637,45 @@ const errText = await page.evaluate(async () => {
     s.addComp("GND", 100, 100, "GND");
   }, "test");
   await window.__spiceLab.run();
-  const el = document.querySelector("#runError .error");
-  return el ? el.textContent : "";
+  const box = document.querySelector("#runError .engine-error");
+  return {
+    title: box?.querySelector("h3")?.textContent || "",
+    fix: box?.querySelector("p")?.textContent || "",
+    culprit: box?.querySelector(".culprit")?.textContent || "",
+    rawHidden: !!box?.querySelector("details pre")
+  };
 });
-check("a netlist ngspice rejects surfaces a readable error, not a crash", errText.length > 0, errText.replace(/\s+/g, " ").slice(0, 110));
+check("a rejected netlist gets a plain-language explanation", errText.title.length > 0 && errText.fix.length > 0, errText.title);
+check("the explanation says what to do about it", /suffix|number/i.test(errText.fix), errText.fix.slice(0, 80));
+check("the offending netlist line is quoted back", errText.culprit.includes("not-a-resistance"), errText.culprit);
+check("the raw ngspice text is still available", errText.rawHidden);
+
+// every translation pattern should match the message it was written for
+const translations = await page.evaluate(() => {
+  const cases = {
+    "singular matrix": "Fatal error: singular matrix: check nodes 3 and 0",
+    "convergence": "doAnalyses: iteration limit reached",
+    "timestep": "Timestep too small; time = 1.2e-09",
+    "missing model": "warning, can't find model 'blah' from line",
+    "bad value": "unknown parameter (not)",
+    "dangling node": "less than two connections at node 4",
+    "unparsed": "Error: circuit not parsed."
+  };
+  const out = {};
+  for (const [name, msg] of Object.entries(cases)) {
+    const e = window.__spiceLab.explainEngineError(msg, "");
+    out[name] = { recognised: e.recognised, title: e.title };
+  }
+  return out;
+});
+const unrecognised = Object.entries(translations).filter(([, v]) => !v.recognised).map(([k]) => k);
+check("every common ngspice failure is translated", unrecognised.length === 0,
+  unrecognised.length ? `missed: ${unrecognised.join(", ")}` : Object.keys(translations).length + " patterns");
+check("an unknown message still gets a usable message",
+  await page.evaluate(() => {
+    const e = window.__spiceLab.explainEngineError("something nobody has seen before", "");
+    return e.title.length > 0 && e.fix.length > 0 && e.recognised === false;
+  }));
 
 /* ------------------------------------------------------------- a11y */
 

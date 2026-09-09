@@ -29,7 +29,7 @@ function distToSeg(px, py, w) {
   return Math.hypot(px - (w.x1 + t * dx), py - (w.y1 + t * dy));
 }
 
-export function createCanvas({ host, store, onStatus, onSelectionChange }) {
+export function createCanvas({ host, store, onStatus, onSelectionChange, onNeedsInspector }) {
   const svg = el("svg", {
     class: "sheet",
     viewBox: `0 0 ${SHEET_W} ${SHEET_H}`,
@@ -45,6 +45,8 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
   let wireRun = null;      // {x, y} anchor of the segment being drawn
   let gesture = null;      // {mode, ...}
   let net = null;          // last connectivity result, for probe hit tests
+  let editing = null;      // the inline <input>, when one is open
+  let lastDown = null;     // for detecting a double-click ourselves
 
   const say = (m) => onStatus?.(m);
 
@@ -72,6 +74,42 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
     view.h = nw * (SHEET_H / SHEET_W);
     applyView();
     render();
+  }
+
+  /**
+   * Bounding box of everything drawn, padded, in sheet coordinates.
+   * Measured from the rendered SVG so label and value text are included —
+   * the geometric bounds cover only the symbols, and text sits outside them.
+   */
+  function contentBox(pad = 26) {
+    const { comps, wires } = store.state;
+    if (!comps.length && !wires.length) return { x: 0, y: 0, w: SHEET_W, h: SHEET_H };
+
+    try {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, seen = false;
+      for (const node of svg.children) {
+        if (node.tagName !== "g" || node.classList.contains("grid-layer")) continue;
+        const b = node.getBBox();
+        if (!b.width && !b.height) continue;
+        seen = true;
+        x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+        x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height);
+      }
+      if (seen) {
+        return { x: x0 - pad, y: y0 - pad, w: (x1 - x0) + pad * 2, h: (y1 - y0) + pad * 2 };
+      }
+    } catch { /* no layout available; fall through to the geometric bounds */ }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    comps.forEach((c) => {
+      const b = boxOf(c, pad);
+      x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0);
+      x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1);
+    });
+    wires.forEach((w) => {
+      x0 = Math.min(x0, w.x1 - pad, w.x2 - pad); y0 = Math.min(y0, w.y1 - pad, w.y2 - pad);
+      x1 = Math.max(x1, w.x1 + pad, w.x2 + pad); y1 = Math.max(y1, w.y1 + pad, w.y2 + pad);
+    });
+    return { x: x0, y: y0, w: Math.max(80, x1 - x0), h: Math.max(80, y1 - y0) };
   }
 
   function fit() {
@@ -148,7 +186,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
   }
 
   function drawGrid() {
-    const g = el("g", { "aria-hidden": "true" }, svg);
+    const g = el("g", { "aria-hidden": "true", class: "grid-layer" }, svg);
     const step = view.w > SHEET_W * 1.2 ? GRID * 2 : GRID;
     const x0 = Math.floor(view.x / step) * step, x1 = view.x + view.w;
     const y0 = Math.floor(view.y / step) * step, y1 = view.y + view.h;
@@ -195,11 +233,17 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
 
       if (!def.noLabel) {
         const t = textAnchor(c);
-        const lab = el("text", { x: t.lx, y: t.ly, class: "part-label", "text-anchor": t.anchor }, g);
+        const lab = el("text", {
+          x: t.lx, y: t.ly, class: "part-label", "text-anchor": t.anchor,
+          "data-edit": "label", "data-id": c.id
+        }, g);
         lab.textContent = c.label;
         const valueText = summarise(c);
         if (valueText) {
-          const val = el("text", { x: t.vx, y: t.vy, class: "part-value", "text-anchor": t.anchor }, g);
+          const val = el("text", {
+            x: t.vx, y: t.vy, class: "part-value", "text-anchor": t.anchor,
+            "data-edit": "value", "data-id": c.id
+          }, g);
           val.textContent = valueText;
         }
       }
@@ -321,6 +365,24 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
     svg.focus({ preventScroll: true });
     const p = toSheet(evt);
     const sp = { x: snap(p.x), y: snap(p.y) };
+
+    // render() rebuilds the sheet on every pointerdown, which detaches the
+    // node the press landed on. Chrome then has no common ancestor for the
+    // press and release, so it never fires click or dblclick here at all.
+    // Double-clicks are therefore timed by hand.
+    const now = performance.now();
+    const isDouble = lastDown && now - lastDown.t < 400 &&
+      Math.abs(evt.clientX - lastDown.cx) < 6 && Math.abs(evt.clientY - lastDown.cy) < 6;
+    lastDown = { t: now, cx: evt.clientX, cy: evt.clientY };
+
+    if (isDouble) {
+      // Suppress the compatibility mouse events. Without this the default
+      // mousedown focus lands on the sheet, blurring the editor we are about
+      // to open and committing it before a key is pressed.
+      evt.preventDefault();
+      if (tool === "wire") { wireRun = null; render(); return; }
+      if (tool === "select") { handleDoubleClick(evt, p); return; }
+    }
 
     if (tool === "probe") {
       const target = probeTargetAt(p);
@@ -474,9 +536,90 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
     if (tool === "wire" && wireRun) { evt.preventDefault(); wireRun = null; render(); }
   });
 
-  svg.addEventListener("dblclick", () => {
-    if (tool === "wire") { wireRun = null; render(); }
-  });
+  /** Route a double-click to the right editor, or to the inspector. */
+  function handleDoubleClick(evt, sheetPoint) {
+    lastDown = null;
+    const text = evt.target.closest?.("[data-edit]");
+    if (text && text.isConnected) {
+      const comp = store.comp(Number(text.getAttribute("data-id")));
+      if (comp) { beginInlineEdit(comp, text.getAttribute("data-edit"), text); return; }
+    }
+    const hit = hitAt(sheetPoint);
+    if (hit?.kind !== "comp") return;
+    const comp = store.comp(hit.id);
+    if (!comp || !PARTS[comp.type].fields.length) return;
+    const anchor = svg.querySelector(`[data-edit="value"][data-id="${comp.id}"]`)
+      || svg.querySelector(`[data-edit="label"][data-id="${comp.id}"]`);
+    if (anchor) beginInlineEdit(comp, "value", anchor);
+  }
+
+  /** The first field that makes sense in a one-line text box. */
+  function inlineField(comp) {
+    return PARTS[comp.type].fields.find((f) => !f.options) || null;
+  }
+
+  /**
+   * Edit a value without leaving the sheet. An HTML input is parked over the
+   * text it replaces rather than using foreignObject, which keeps focus and
+   * selection behaving the way people expect from an ordinary field.
+   */
+  function beginInlineEdit(comp, which, anchorEl) {
+    const field = which === "label" ? null : inlineField(comp);
+    if (which !== "label" && !field) {
+      onNeedsInspector?.(comp);
+      return;
+    }
+
+    const hostRect = host.getBoundingClientRect();
+    const rect = anchorEl.getBoundingClientRect();
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "inline-edit";
+    input.value = which === "label" ? comp.label : (comp[field.k] ?? "");
+    input.setAttribute("aria-label", which === "label"
+      ? `Reference designator for ${comp.label}`
+      : `${field.label} for ${comp.label}`);
+    input.style.left = `${Math.max(2, rect.left - hostRect.left - 6)}px`;
+    input.style.top = `${rect.top - hostRect.top - 4}px`;
+    input.style.width = `${Math.max(72, rect.width + 28)}px`;
+
+    let done = false;
+    const openedAt = performance.now();
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const next = input.value.trim();
+      input.remove();
+      editing = null;
+      if (commit && next) {
+        store.edit(() => {
+          if (which === "label") comp.label = next;
+          else comp[field.k] = next;
+        }, "inline-edit");
+        say(`${comp.label} set to ${next}.`);
+      } else {
+        render();
+      }
+    };
+
+    input.addEventListener("keydown", (evt) => {
+      evt.stopPropagation();
+      if (evt.key === "Enter") { evt.preventDefault(); finish(true); }
+      if (evt.key === "Escape") { evt.preventDefault(); finish(false); }
+    });
+    input.addEventListener("blur", () => {
+      // The click that opened the editor can bounce focus straight back to the
+      // sheet. Reclaim it rather than treating that as the user leaving.
+      if (performance.now() - openedAt < 60) { input.focus(); return; }
+      finish(true);
+    });
+
+    host.appendChild(input);
+    editing = input;
+    input.focus();
+    input.select();
+  }
 
   svg.addEventListener("wheel", (evt) => {
     evt.preventDefault();
@@ -489,6 +632,8 @@ export function createCanvas({ host, store, onStatus, onSelectionChange }) {
     svg,
     render,
     fit,
+    isEditing: () => !!editing,
+    contentBox,
     zoomIn: () => zoomBy(0.8),
     zoomOut: () => zoomBy(1.25),
     getTool: () => tool,

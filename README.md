@@ -125,6 +125,32 @@ Statistics more than nine orders of magnitude below a trace's own amplitude are
 reported as zero, so the mean of a symmetric waveform reads `0 V` rather than
 `60.86p V`.
 
+**Your circuits.** Named circuits saved in the browser, listed in the My
+circuits panel. Anything that would replace the sheet — opening a lab, starting
+a new sheet, opening a file or a link — checks first whether there are unsaved
+changes and asks before discarding them.
+
+**Shareable links.** Copy link puts the whole circuit in a URL. Post one in
+Canvas and it opens the exact starting circuit; a student pastes one back as
+their submission. No files, no uploads, no version confusion. The payload is
+deflated where the browser supports CompressionStream and stored plain where it
+does not, so a link made in one browser opens in any of them.
+
+**Editing on the sheet.** Double-click a value or a designator to change it in
+place, without the trip to the inspector. Enter commits, Escape abandons.
+Parts whose only settings are dropdowns open the inspector instead.
+
+**PNG export.** The schematic and the waveform plot each export as an image for
+lab reports. The schematic is exported at the content's own bounds rather than
+the current zoom, at roughly 2600 pixels wide whatever the zoom level, with the
+dot grid left out.
+
+**Errors in plain language.** ngspice talks to circuit engineers: "Error on
+line 2 or its substitute" and "singular matrix" mean nothing to someone three
+weeks into a course. Failures are translated into what went wrong and what to
+do about it, with the offending netlist line quoted back and the original
+message one click away.
+
 **Labs.** Five guided labs — voltage divider, RC low-pass, half-wave rectifier,
 transistor bias, inverting amplifier — each with a starter circuit, tasks, and
 checks that run a real simulation and report against a tolerance.
@@ -146,6 +172,33 @@ src/
 test/e2e.mjs        end-to-end suite (Playwright)
 ```
 
+### Notes on the error translations
+
+Two of these are worth knowing about if you extend `src/errors.js`.
+
+ngspice reports a **bad value on a passive part as a missing model**, because an
+unrecognised third token on the line is read as a model name. Typing
+`4.7 kilohms` into a resistor produces `can't find model '4.7'`. The translation
+for that case names both causes, or a student with a typo in a resistance gets
+sent hunting for a model they never touched.
+
+An **unrecognised** message still produces a title and a suggested next step
+rather than falling through to raw SPICE. The raw text is always kept and shown
+behind a disclosure, because it matters to anyone who does read it.
+
+### Two things the browser does that shaped this
+
+`render()` rebuilds the whole sheet on every `pointerdown`, which detaches the
+node the press landed on. Chrome then has no common ancestor for the press and
+the release, so **`click` and `dblclick` never fire on the sheet at all** — the
+double-click-to-end-a-wire binding had been dead since it was written.
+Double-clicks are timed by hand in the `pointerdown` handler instead.
+
+Opening the inline editor also has to call `preventDefault()` on that
+`pointerdown`. Otherwise the compatibility `mousedown` runs its default focus
+action, focus lands on the sheet, the editor blurs, and it commits and closes
+before a key is pressed.
+
 ## Design notes
 
 **The engine is lazy-loaded.** `eecircuit-engine` is a single ~20 MB ES module
@@ -162,6 +215,19 @@ undo attracts. Drag gestures apply live and commit once, on release.
 numbering falls out of the drawing and shifts the moment a student rewires
 anything. `ctx.v("R2", 0)` asks for the voltage on pin 0 of R2 and survives a
 rewire; asking for node 2 does not.
+
+**PNG export copies computed styles rather than restating the stylesheet.** The
+schematic is SVG styled by an external sheet, so a serialised clone comes out
+unstyled. The exporter walks the clone alongside the original and copies each
+painting property from `getComputedStyle`, which cannot drift the way a second
+copy of the CSS would. Content bounds come from `getBBox` on the rendered
+groups, because the geometric bounds cover only the symbols and would crop the
+labels sitting outside them.
+
+**Unsaved work is tracked by comparison, not by flag.** `markClean()` stores a
+serialised copy of the state at each save or load, and `isDirty()` compares
+against it. Circuits are small enough that this costs nothing, and it cannot
+drift out of sync the way a boolean set from a dozen call sites does.
 
 **Everything redraws from `refresh()`.** The netlist, parts table, validation
 messages, and inspector are all pure functions of the store, so they cannot
