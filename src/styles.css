@@ -242,6 +242,7 @@ svg.sheet.mode-pan { cursor: grab; }
 svg.sheet.mode-pan:active { cursor: grabbing; }
 svg.sheet.mode-zoom { cursor: zoom-in; }
 svg.sheet.mode-text { cursor: text; }
+svg.sheet.is-locked.mode-pan { cursor: not-allowed; }
 svg.sheet:focus-visible { outline-offset: -3px; }
 
 .grid-dot { fill: var(--grid-dot); }

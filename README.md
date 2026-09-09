@@ -115,8 +115,17 @@ in the panel, with a running tally in the heading. Progress lives in the
 browser, so it is per machine rather than per student account.
 
 **Navigation.** A hand tool for dragging the view and a zoom-area tool for
-framing a rectangle, alongside the existing Alt-drag pan, scroll zoom, and Fit.
-Dragging with the zoom tool frames that region; clicking with it steps in.
+framing a rectangle, alongside middle-drag pan and Fit. Dragging with the zoom
+tool frames that region; clicking with it steps in.
+
+**Scrolling past the sheet.** A plain two-finger scroll over the schematic
+scrolls the *page*. Only a pinch — which macOS reports as a wheel event with
+`ctrlKey` set — or Command/Control plus wheel zooms the sheet. Swallowing every
+wheel event, as this first did, traps the page behind the canvas and there is no
+way to scroll past it. **Lock view**, or `L`, additionally freezes pinch-zoom
+and middle-drag, which is worth setting when the app is embedded in a page that
+scrolls. The zoom buttons and Fit keep working while locked, and the setting
+persists.
 
 **Annotations.** A text tool for putting notes on the sheet — what a stage does,
 what to measure, a formula worth remembering. Annotations are selected, moved,

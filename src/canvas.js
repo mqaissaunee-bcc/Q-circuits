@@ -48,6 +48,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   let editing = null;      // the inline <input>, when one is open
   let lastDown = null;     // for detecting a double-click ourselves
   let caret = null;        // grid position for keyboard placement
+  let viewLocked = false;  // when set, the sheet ignores wheel and middle-drag
   const noteBoxes = new Map();  // note id -> measured bounds, for hit testing
 
   const say = (m) => onStatus?.(m);
@@ -439,6 +440,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   /* ----------------------------------------------------------- gestures */
 
   svg.addEventListener("pointerdown", (evt) => {
+    if (evt.button === 1 && viewLocked) return;
     if (evt.button === 1 || (evt.button === 0 && tool === "pan")) {
       gesture = { mode: "pan", start: toSheet(evt), view: { ...view } };
       svg.setPointerCapture(evt.pointerId);
@@ -899,6 +901,12 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
 
 
   svg.addEventListener("wheel", (evt) => {
+    // A plain two-finger scroll belongs to the page. macOS reports a trackpad
+    // pinch as a wheel event with ctrlKey set, and Ctrl or Command plus wheel
+    // is the equivalent with a mouse — those are the only ones that zoom.
+    // Swallowing every wheel event trapped the page behind the sheet.
+    if (!(evt.ctrlKey || evt.metaKey)) return;
+    if (viewLocked) return;
     evt.preventDefault();
     zoomBy(evt.deltaY > 0 ? 1.12 : 0.89, toSheet(evt));
   }, { passive: false });
@@ -911,6 +919,13 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     fit,
     isEditing: () => !!editing,
     contentBox,
+
+    /** Freeze the accidental view gestures: wheel zoom and middle-drag pan. */
+    setViewLocked(locked) {
+      viewLocked = locked;
+      svg.classList.toggle("is-locked", locked);
+    },
+    isViewLocked: () => viewLocked,
 
     /** True when a tool places things and so owns the arrow keys. */
     isPlacing: () => !!PARTS[tool] || tool === "wire" || tool === "text",

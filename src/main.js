@@ -109,6 +109,25 @@ $("btnRotate").addEventListener("click", () => {
   if (store.selection.size) { store.rotateSelection(); say("Rotated."); }
   else say(`Placement angle is now ${canvas.rotateGhost()} degrees.`);
 });
+const VIEW_LOCK_KEY = "q-circuits-viewlock-v1";
+
+function setViewLock(locked, announce = true) {
+  canvas.setViewLocked(locked);
+  const btn = $("btnLockView");
+  btn.setAttribute("aria-pressed", locked ? "true" : "false");
+  btn.title = locked
+    ? "The sheet ignores pinch-zoom and middle-drag. The zoom buttons still work."
+    : "Stop the sheet responding to pinch-zoom and middle-drag";
+  try { localStorage.setItem(VIEW_LOCK_KEY, locked ? "1" : "0"); } catch { /* storage blocked */ }
+  if (announce) {
+    say(locked
+      ? "View locked. Pinch and middle-drag are ignored; the zoom buttons still work."
+      : "View unlocked.");
+  }
+}
+
+$("btnLockView").addEventListener("click", () => setViewLock(!canvas.isViewLocked()));
+
 $("btnZoomIn").addEventListener("click", () => canvas.zoomIn());
 $("btnZoomOut").addEventListener("click", () => canvas.zoomOut());
 $("btnFit").addEventListener("click", () => { canvas.fit(); say("View fitted to the circuit."); });
@@ -132,7 +151,7 @@ helpDialog.addEventListener("click", (evt) => { if (evt.target === helpDialog) c
 /* ------------------------------------------------------------- keyboard */
 
 const TOOL_KEYS = {
-  s: "select", w: "wire", b: "probe", r: "R", c: "C", l: "L",
+  s: "select", w: "wire", b: "probe", r: "R", c: "C", n: "L",
   v: "V", i: "I", d: "D", g: "GND", q: "NPN", m: "NMOS", u: "OPAMP",
   a: "AM", h: "pan", z: "zoomrect", t: "text"
 };
@@ -170,6 +189,7 @@ document.addEventListener("keydown", (evt) => {
   if (evt.key === "?" || (key === "/" && evt.shiftKey)) { evt.preventDefault(); openHelp(); return; }
   if (TOOL_KEYS[key]) { setTool(TOOL_KEYS[key]); say(`${key.toUpperCase()} tool active.`); return; }
   if (key === "o") { $("btnRotate").click(); return; }
+  if (key === "l" && !evt.shiftKey) { $("btnLockView").click(); return; }
   if (evt.key === "Escape") {
     canvas.clearCaret();
     canvas.cancel();
@@ -966,6 +986,8 @@ async function boot() {
   $("docTitle").value = store.state.title;
   store.markClean();
   renderLibrary();
+  try { setViewLock(localStorage.getItem(VIEW_LOCK_KEY) === "1", false); }
+  catch { setViewLock(false, false); }
   refresh();
   canvas.fit();
   setTool("select");

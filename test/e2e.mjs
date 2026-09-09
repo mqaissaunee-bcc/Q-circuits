@@ -629,6 +629,66 @@ check("wire ends touching nothing are marked on the sheet", openMarkers.broken.e
   `${openMarkers.broken.ends} open wire ends`);
 await page.evaluate(() => window.__spiceLab.store.undo());
 
+/* ----------------------------------------------------- scrolling vs zoom */
+
+console.log("\n— scroll, pinch and the view lock —");
+await page.evaluate(() => {
+  document.getElementById("labSelect").value = "divider";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+});
+await page.waitForTimeout(200);
+const wheelBox = await boxOf(page, "svg.sheet");
+const readView = () => page.evaluate(() =>
+  Number(document.querySelector("svg.sheet").getAttribute("viewBox").split(" ")[2]));
+
+// A plain wheel must not be swallowed: it belongs to the page.
+const beforePlain = await readView();
+const plainDefaultPrevented = await page.evaluate(({ x, y }) => {
+  const svg = document.querySelector("svg.sheet");
+  const evt = new WheelEvent("wheel", { deltaY: 120, clientX: x, clientY: y, bubbles: true, cancelable: true });
+  svg.dispatchEvent(evt);
+  return evt.defaultPrevented;
+}, { x: wheelBox.x + wheelBox.width / 2, y: wheelBox.y + wheelBox.height / 2 });
+await page.waitForTimeout(120);
+check("a plain scroll over the sheet is left for the page",
+  plainDefaultPrevented === false && (await readView()) === beforePlain,
+  `defaultPrevented=${plainDefaultPrevented}`);
+
+// A trackpad pinch arrives as a wheel event with ctrlKey set.
+const pinched = await page.evaluate(({ x, y }) => {
+  const svg = document.querySelector("svg.sheet");
+  const evt = new WheelEvent("wheel", { deltaY: -120, ctrlKey: true, clientX: x, clientY: y, bubbles: true, cancelable: true });
+  svg.dispatchEvent(evt);
+  return evt.defaultPrevented;
+}, { x: wheelBox.x + wheelBox.width / 2, y: wheelBox.y + wheelBox.height / 2 });
+await page.waitForTimeout(120);
+const afterPinch = await readView();
+check("a pinch zooms the sheet", pinched === true && afterPinch < beforePlain,
+  `${beforePlain.toFixed(0)} → ${afterPinch.toFixed(0)}`);
+
+// Locking ignores the pinch as well
+await page.click("#btnLockView");
+const lockedBefore = await readView();
+await page.evaluate(({ x, y }) => {
+  document.querySelector("svg.sheet").dispatchEvent(new WheelEvent("wheel",
+    { deltaY: -120, ctrlKey: true, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+}, { x: wheelBox.x + wheelBox.width / 2, y: wheelBox.y + wheelBox.height / 2 });
+await page.waitForTimeout(120);
+check("a locked view ignores the pinch", (await readView()) === lockedBefore,
+  `${lockedBefore.toFixed(0)} held`);
+check("the lock button reports its state",
+  (await page.getAttribute("#btnLockView", "aria-pressed")) === "true");
+
+// the explicit zoom buttons still work while locked
+await page.click("#btnZoomIn");
+await page.waitForTimeout(120);
+check("the zoom buttons still work while locked", (await readView()) < lockedBefore,
+  `${lockedBefore.toFixed(0)} → ${(await readView()).toFixed(0)}`);
+
+await page.click("#btnLockView");
+check("unlocking restores pinch zoom",
+  (await page.getAttribute("#btnLockView", "aria-pressed")) === "false");
+
 /* ------------------------------------------------- pan, zoom area, text */
 
 console.log("\n— navigation and annotation tools —");

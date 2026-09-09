@@ -51,6 +51,8 @@
     <div class="tool-group" id="viewTools" role="group" aria-label="Navigation">
       <button type="button" data-tool="pan" aria-pressed="false">Pan<kbd>H</kbd></button>
       <button type="button" data-tool="zoomrect" aria-pressed="false">Zoom area<kbd>Z</kbd></button>
+      <button type="button" id="btnLockView" class="ghost" aria-pressed="false"
+              title="Stop the sheet responding to pinch-zoom and middle-drag">Lock view<kbd>L</kbd></button>
     </div>
     <div class="tool-group" id="partTools" role="group" aria-label="Parts"></div>
     <div class="tool-group" role="group" aria-label="Edit">
@@ -85,7 +87,8 @@
     <p class="hint-bar">
       <span>Pick a part, then click the sheet to place it.</span>
       <span>Drag on empty space to box-select.</span>
-      <span>Middle-drag to pan, scroll to zoom.</span>
+      <span>Two-finger scroll moves the page; pinch, or ⌘-scroll, zooms the sheet.</span>
+      <span>Middle-drag to pan.</span>
       <span>Alt-drag to peel off a copy.</span>
       <span>⌘-drag or Ctrl-drag moves a part and leaves the wires put.</span>
       <span>Double-click a value to edit it in place.</span>
@@ -268,7 +271,7 @@
       <section>
         <h3>Parts</h3>
         <dl class="shortcuts">
-          <dt><kbd>R</kbd> <kbd>C</kbd> <kbd>L</kbd></dt><dd>Resistor, capacitor, inductor</dd>
+          <dt><kbd>R</kbd> <kbd>C</kbd> <kbd>N</kbd></dt><dd>Resistor, capacitor, inductor</dd>
           <dt><kbd>V</kbd> <kbd>I</kbd></dt><dd>Voltage and current source</dd>
           <dt><kbd>D</kbd></dt><dd>Diode</dd>
           <dt><kbd>A</kbd></dt><dd>Ammeter</dd>
@@ -299,7 +302,9 @@
           <dt><kbd>⌘</kbd> / <kbd>Ctrl</kbd> drag</dt><dd>Move a part but leave every wire where it is</dd>
           <dt>Drag a wire end</dt><dd>Reroute it; ends on a pin stay put</dd>
           <dt>Middle-drag</dt><dd>Pan without changing tool</dd>
-          <dt>Scroll</dt><dd>Zoom</dd>
+          <dt>Pinch, or <kbd>⌘</kbd>-scroll</dt><dd>Zoom the sheet</dd>
+          <dt>Two-finger scroll</dt><dd>Scrolls the page, not the sheet</dd>
+          <dt><kbd>L</kbd></dt><dd>Lock the view against pinch and middle-drag</dd>
           <dt><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd></dt><dd>Move the selection, or the placement cursor</dd>
           <dt><kbd>⇧</kbd> + arrows</dt><dd>Move or step in fives</dd>
           <dt><kbd>Enter</kbd></dt><dd>Place the part at the cursor</dd>
