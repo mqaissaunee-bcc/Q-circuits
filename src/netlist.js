@@ -50,13 +50,42 @@ export function buildNodes(comps, wires) {
   const grounded = new Set();
   pts.forEach((p, i) => { if (p.comp && p.comp.type === "GND") grounded.add(find(i)); });
 
+  // A net label renames the node it sits on, so the netlist reads in the
+  // circuit's own terms rather than in numbers the editor happened to assign.
+  const labelOfRoot = new Map();
+  const labelClashes = [];
+  pts.forEach((p, i) => {
+    if (!p.comp || p.comp.type !== "NET") return;
+    const wanted = String(p.comp.netname || "").trim();
+    if (!wanted) return;
+    const r = find(i);
+    if (labelOfRoot.has(r) && labelOfRoot.get(r) !== wanted) {
+      labelClashes.push({ kind: "two-names", a: labelOfRoot.get(r), b: wanted });
+    } else {
+      labelOfRoot.set(r, wanted);
+    }
+  });
+
   const nodeOfRoot = new Map();
+  const usedNames = new Map();
   let next = 0;
   pts.forEach((_, i) => {
     const r = find(i);
     if (nodeOfRoot.has(r)) return;
-    nodeOfRoot.set(r, grounded.has(r) ? 0 : ++next);
+    if (grounded.has(r)) { nodeOfRoot.set(r, "0"); return; }
+    const label = labelOfRoot.get(r);
+    if (label) {
+      if (usedNames.has(label)) labelClashes.push({ kind: "reused", a: label });
+      usedNames.set(label, r);
+      nodeOfRoot.set(r, label);
+    } else {
+      nodeOfRoot.set(r, String(++next));
+    }
   });
+
+  // a label on the ground net cannot rename node 0
+  const groundLabels = [];
+  labelOfRoot.forEach((name, r) => { if (grounded.has(r)) groundLabels.push(name); });
 
   const pinNode = new Map();      // comp.id:pinIndex -> node
   const coordNode = new Map();    // "x,y" -> node
@@ -85,11 +114,49 @@ export function buildNodes(comps, wires) {
     });
   });
 
-  return { pinNode, coordNode, degree, pinCount, count: next };
+  return { pinNode, coordNode, degree, pinCount, count: next, labelClashes, groundLabels };
 }
 
 export function nodesFor(comp, net) {
   return PARTS[comp.type].pins.map((_, i) => net.pinNode.get(`${comp.id}:${i}`));
+}
+
+/* ----------------------------------------------------------- ascii safety */
+
+/**
+ * ngspice compiled to WASM does not merely reject a non-ASCII byte — it hangs,
+ * locking the browser thread with no error and no way back. A student typing
+ * 10µF or 4.7kΩ, or a circuit title with an em dash, would freeze the tab.
+ *
+ * So the netlist is transliterated to plain ASCII before it is ever generated.
+ * The substitutions are the ones that carry meaning — µ really does mean u to
+ * SPICE — and anything else outside printable ASCII is dropped, which turns
+ * 4.7kΩ into the 4.7k that was meant.
+ */
+const ASCII_SUBSTITUTIONS = [
+  [/[\u00B5\u03BC]/g, "u"],        // micro sign, Greek mu
+  [/[\u03A9\u2126]/g, ""],         // ohm sign: the unit is implied
+  [/[\u2212\u2013\u2014]/g, "-"], // minus sign, en dash, em dash
+  [/[\u2018\u2019]/g, "'"],
+  [/[\u201C\u201D]/g, '"'],
+  [/\u00D7/g, "*"],
+  [/\u00F7/g, "/"],
+  [/\u03C0/g, "pi"],
+  [/\u00A0/g, " "],                // non-breaking space
+  [/\u00B0/g, ""]                  // degree sign
+];
+
+export function toAscii(text) {
+  let out = String(text);
+  ASCII_SUBSTITUTIONS.forEach(([pattern, replacement]) => {
+    out = out.replace(pattern, replacement);
+  });
+  // Anything still outside printable ASCII would hang the engine.
+  return out.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
+}
+
+export function hasNonAscii(text) {
+  return /[^\x09\x0A\x0D\x20-\x7E]/.test(String(text));
 }
 
 /* -------------------------------------------------------------- directives */
@@ -128,13 +195,75 @@ export function buildNetlist(comps, wires, analysis, title = "Circuit from the s
   lines.push("");
   lines.push(analysisDirective(analysis));
   lines.push(".end");
-  return { text: lines.join("\n"), net };
+
+  const body = lines.slice(1).join("\n");
+  const text = toAscii(lines.join("\n"));
+  // Only flag characters the student typed; the title line is ours to clean.
+  return { text, net, transliterated: toAscii(body) !== body };
+}
+
+/* --------------------------------------------------------- blocking faults */
+
+/**
+ * Faults that must never reach the engine.
+ *
+ * ngspice-WASM does not reject a loop of voltage sources — it spins forever,
+ * locking the browser thread with no error and no way to recover short of
+ * closing the tab. Two identical sources wired in parallel is a routine
+ * student mistake, so the circuit is inspected for it here and the run is
+ * refused with an explanation instead.
+ *
+ * Only genuinely hanging constructs belong in this list. Ordinary mistakes —
+ * a bad value, a dangling node — produce a clean ngspice error and are far
+ * more useful to a student when they see the engine report them.
+ */
+export function blockingFaults(comps, net) {
+  const faults = [];
+
+  // Each of these drives a node hard: a voltage source, an ammeter (a 0 V
+  // source) and an ideal op-amp output, which is a source referred to ground.
+  const driven = [];
+  comps.forEach((c) => {
+    if (c.type === "V" || c.type === "AM") {
+      const nd = nodesFor(c, net);
+      driven.push({ label: c.label, a: nd[0], b: nd[1] });
+    } else if (c.type === "OPAMP") {
+      const nd = nodesFor(c, net);
+      driven.push({ label: c.label, a: nd[2], b: "0" });
+    }
+  });
+
+  driven.forEach((d) => {
+    if (d.a === d.b) {
+      faults.push(`${d.label} has both of its terminals on the same node, which short-circuits it. Remove the short, or the part.`);
+    }
+  });
+
+  for (let i = 0; i < driven.length; i++) {
+    for (let j = i + 1; j < driven.length; j++) {
+      const x = driven[i], y = driven[j];
+      if (x.a === x.b || y.a === y.b) continue;
+      const same = (x.a === y.a && x.b === y.b) || (x.a === y.b && x.b === y.a);
+      if (same) {
+        faults.push(`${x.label} and ${y.label} are wired in parallel across the same two nodes. Two sources cannot both set the voltage there — remove one of them.`);
+      }
+    }
+  }
+
+  return faults;
 }
 
 /* ------------------------------------------------------------- validation */
 
-export function validate(comps, wires, net, analysis) {
+export function validate(comps, wires, net, analysis, transliterated = false) {
   const msgs = [];
+
+  if (transliterated) {
+    msgs.push({
+      level: "warn",
+      text: "Characters such as µ or Ω were converted to plain text for the simulator. Write values as 10u and 4.7k."
+    });
+  }
   const parts = comps.filter((c) => c.type !== "GND");
 
   if (!parts.length) {
@@ -157,8 +286,25 @@ export function validate(comps, wires, net, analysis) {
     });
   });
 
+  net.labelClashes.forEach((c) => {
+    if (c.kind === "two-names") {
+      msgs.push({ level: "error", text: `The same node is labelled both ${c.a} and ${c.b}. A node can only have one name.` });
+    } else {
+      msgs.push({ level: "error", text: `The name ${c.a} is used on two different nodes. Net names have to be unique.` });
+    }
+  });
+  net.groundLabels.forEach((name) => {
+    msgs.push({ level: "warn", text: `The label ${name} sits on the ground net, which is always node 0 and cannot be renamed.` });
+  });
+  comps.filter((c) => c.type === "NET").forEach((c) => {
+    const name = String(c.netname || "").trim();
+    if (name && !/^[A-Za-z][A-Za-z0-9_]*$/.test(name)) {
+      msgs.push({ level: "error", text: `${name} is not a usable net name. Start with a letter and use only letters, digits and underscore — no spaces.` });
+    }
+  });
+
   net.pinCount.forEach((n, node) => {
-    if (node !== 0 && n < 2) {
+    if (node !== "0" && n < 2) {
       msgs.push({ level: "warn", text: `Node ${node} has only one pin on it. ngspice will refuse to converge on a dangling node.` });
     }
   });
@@ -176,7 +322,8 @@ export function validate(comps, wires, net, analysis) {
   }
 
   if (!msgs.length) {
-    msgs.push({ level: "ok", text: `Connectivity is clean. ${net.count} node${net.count === 1 ? "" : "s"} above ground, ${parts.length} part${parts.length === 1 ? "" : "s"}.` });
+    const nodes = new Set([...net.pinNode.values()].filter((n) => n !== "0")).size;
+    msgs.push({ level: "ok", text: `Connectivity is clean. ${nodes} node${nodes === 1 ? "" : "s"} above ground, ${parts.length} part${parts.length === 1 ? "" : "s"}.` });
   }
   return msgs;
 }

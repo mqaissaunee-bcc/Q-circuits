@@ -7,7 +7,7 @@
  */
 
 import { PARTS, PALETTE, pinsOf, netlistNameOf } from "./parts.js";
-import { buildNodes, buildNetlist, nodesFor, validate, formatEng } from "./netlist.js";
+import { buildNodes, buildNetlist, nodesFor, validate, formatEng, blockingFaults } from "./netlist.js";
 import { Store, DEFAULT_ANALYSIS } from "./store.js";
 import { createCanvas } from "./canvas.js";
 import { createScope } from "./scope.js";
@@ -43,6 +43,8 @@ const scope = createScope({ host: $("scopeHost"), measureHost: $("measureHost"),
 
 let currentLab = null;
 let lastResult = null;
+let lastVoltages = new Map();
+let lastTransliterated = false;
 let running = false;
 
 /**
@@ -440,7 +442,16 @@ async function run() {
   const progress = (m) => { note.textContent = m; say(m); };
 
   try {
-    const { text } = buildNetlist(store.state.comps, store.state.wires, store.state.analysis, store.state.title);
+    const { text, net } = buildNetlist(store.state.comps, store.state.wires, store.state.analysis, store.state.title);
+
+    const blocking = blockingFaults(store.state.comps, net);
+    if (blocking.length) {
+      showBlockingFaults(blocking);
+      note.textContent = "The circuit was not sent to the simulator.";
+      say("The circuit has a fault that would hang the simulator. See the message under the Run button.");
+      return;
+    }
+
     const result = await runNetlist(text, progress);
     lastResult = result;
     applyResult(result);
@@ -467,6 +478,17 @@ function applyResult(result) {
   if (!modes.hidden) setAcMode(scope.getMode());
 
   renderOpResults(result);
+
+  const volts = nodeVoltageMap(result);
+  const btn = $("btnNodeVolts");
+  btn.disabled = volts.size === 0;
+  if (volts.size === 0) {
+    canvas.setNodeVoltages(null);
+    btn.setAttribute("aria-pressed", "false");
+  } else if (btn.getAttribute("aria-pressed") === "true") {
+    canvas.setNodeVoltages(volts);
+  }
+  lastVoltages = volts;
 }
 
 /** When probes are placed, show only what was probed. */
@@ -485,6 +507,32 @@ function filterToProbes(result) {
   });
   const traces = result.traces.filter((t) => wanted.has(t.name.toLowerCase()));
   return traces.length ? { ...result, traces } : result;
+}
+
+/**
+ * Operating-point voltages, keyed by node id, for annotating the sheet.
+ * Only meaningful for a run with no sweep — a waveform has no single value.
+ */
+function nodeVoltageMap(result) {
+  const map = new Map();
+  if (!result || result.sweep) return map;
+  result.traces.forEach((t) => {
+    const m = t.name.match(/^v\((.+)\)$/i);
+    if (!m || t.type === "current") return;
+    map.set(m[1], `${formatEng(t.values[t.values.length - 1], 4)} V`);
+  });
+  // ngspice lower-cases vector names; match them back to the sheet's own ids
+  const net = cachedNet;
+  if (net) {
+    const fixed = new Map();
+    const ids = new Set([...net.pinNode.values()]);
+    map.forEach((v, k) => {
+      const match = [...ids].find((id) => String(id).toLowerCase() === k.toLowerCase());
+      fixed.set(match !== undefined ? match : k, v);
+    });
+    return fixed;
+  }
+  return map;
 }
 
 function renderOpResults(result) {
@@ -518,6 +566,32 @@ function renderOpResults(result) {
   });
   table.appendChild(body);
   host.appendChild(table);
+}
+
+/** Faults refused before the engine is called, with the reason. */
+function showBlockingFaults(faults) {
+  const host = $("runError");
+  host.replaceChildren();
+  const box = document.createElement("div");
+  box.className = "engine-error";
+  box.setAttribute("role", "alert");
+
+  const h = document.createElement("h3");
+  h.textContent = faults.length === 1
+    ? "This circuit cannot be simulated yet."
+    : `This circuit cannot be simulated yet — ${faults.length} things to fix.`;
+  box.appendChild(h);
+
+  const ul = document.createElement("ul");
+  ul.style.cssText = "margin:0;padding-left:1.1rem";
+  faults.forEach((f) => {
+    const li = document.createElement("li");
+    li.textContent = f;
+    li.style.marginBottom = "var(--sp-2)";
+    ul.appendChild(li);
+  });
+  box.appendChild(ul);
+  host.appendChild(box);
 }
 
 function showRunError(message, netlist) {
@@ -575,6 +649,14 @@ $("acModes").addEventListener("click", (evt) => {
   scope.setMode(b.dataset.mode);
   setAcMode(b.dataset.mode);
   say(`Plot showing ${b.textContent}.`);
+});
+
+$("btnNodeVolts").addEventListener("click", () => {
+  const on = $("btnNodeVolts").getAttribute("aria-pressed") === "true";
+  const next = !on;
+  $("btnNodeVolts").setAttribute("aria-pressed", next ? "true" : "false");
+  canvas.setNodeVoltages(next ? lastVoltages : null);
+  say(next ? "Node voltages shown on the schematic." : "Node voltages hidden.");
 });
 
 $("btnPngSheet").addEventListener("click", async () => {
@@ -916,8 +998,9 @@ let cachedNet = null;
 const lastNet = () => cachedNet;
 
 function refresh() {
-  const { text, net } = buildNetlist(store.state.comps, store.state.wires, store.state.analysis, store.state.title);
+  const { text, net, transliterated } = buildNetlist(store.state.comps, store.state.wires, store.state.analysis, store.state.title);
   cachedNet = net;
+  lastTransliterated = transliterated;
 
   $("netOut").value = text;
   if ($("docTitle").value !== store.state.title) $("docTitle").value = store.state.title;
@@ -925,7 +1008,7 @@ function refresh() {
   canvas.render();
   renderInspector();
   renderPartsTable(net);
-  renderChecks(validate(store.state.comps, store.state.wires, net, store.state.analysis));
+  renderChecks(validate(store.state.comps, store.state.wires, net, store.state.analysis, transliterated));
 
   $("btnUndo").disabled = !store.canUndo();
   $("btnRedo").disabled = !store.canRedo();

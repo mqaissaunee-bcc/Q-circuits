@@ -16,13 +16,14 @@ export const MODEL_CARDS = {
   D1N4148: ".model D1N4148 D(IS=2.52n RS=0.568 N=1.752 CJO=4p M=0.4 TT=20n BV=100)",
   DLED: ".model DLED D(IS=1e-19 N=1.9 RS=2.4 BV=5)",
   DZ5V1: ".model DZ5V1 D(IS=1e-14 N=1.0 RS=1 BV=5.1 IBV=20m)",
+  D1N750: ".model D1N750 D(IS=880.5E-18 RS=0.25 N=1 BV=4.7 IBV=20.245m CJO=175p)",
   QNPN: ".model QNPN NPN(IS=1e-14 BF=200 VAF=100 RB=10 RC=1 CJE=8p CJC=4p TF=0.3n)",
   QPNP: ".model QPNP PNP(IS=1e-14 BF=150 VAF=80 RB=10 RC=1 CJE=8p CJC=4p TF=0.6n)",
   MNMOS: ".model MNMOS NMOS(VTO=2.0 KP=0.5 LAMBDA=0.01 RD=1 RS=0.5)",
   MPMOS: ".model MPMOS PMOS(VTO=-2.0 KP=0.25 LAMBDA=0.01 RD=2 RS=1)"
 };
 
-const DIODE_MODELS = ["Dgen", "D1N4148", "DLED", "DZ5V1"];
+const DIODE_MODELS = ["Dgen", "D1N4148", "D1N750", "DLED", "DZ5V1"];
 
 /* ------------------------------------------------------------------ shapes */
 
@@ -36,6 +37,7 @@ const S = {
       "M23 0H37", "M33 -4L37 0L33 4"],
   D: ["M0 0H22", "M38 0H60", "M22 -9L38 0L22 9Z", "M38 -9V9"],
   GND: ["M0 0V10", "M-11 10H11", "M-6.5 15H6.5", "M-2.5 20H2.5"],
+  NET: ["M0 0V-11", "M-4 -11 H30 L36 -19 L30 -27 H-4 Z"],
   SW_OPEN: ["M0 0H16", "M44 0H60", "M16 0 L41 -13"],
   SW_CLOSED: ["M0 0H16", "M44 0H60", "M16 0 L44 -4"],
   NPN: ["M0 0H20", "M20 -18V18", "M20 -10 L40 -24 V-40", "M20 10 L40 24 V40",
@@ -119,6 +121,20 @@ export const PARTS = {
     },
     netlistName: (c) => `R${c.label}`,
     models: () => []
+  },
+
+  /**
+   * Net label. Names the node it sits on, so the netlist reads
+   * `R2 MID OUT 1k` instead of `R2 2 3 1k`. Emits nothing itself.
+   */
+  NET: {
+    key: "NET", name: "Net label", prefix: "N", shape: S.NET,
+    pins: [[0, 0]], pinNames: ["net"],
+    box: [-8, -31, 40, 6],
+    fields: [{ k: "netname", label: "Net name", def: "OUT",
+               hint: "Letters, digits and underscore. Appears in the netlist in place of a node number" }],
+    caption: (c) => c.netname,
+    emit: () => [], models: () => [], noLabel: true
   },
 
   GND: {
@@ -206,7 +222,7 @@ export const PARTS = {
     ],
     emit: (c, n) => {
       // V(0) is not a legal reference, so a grounded input is written as 0.
-      const at = (node) => (node === 0 ? "0" : `V(${node})`);
+      const at = (node) => (node === "0" ? "0" : `V(${node})`);
       const diff = `${at(n[0])} - ${at(n[1])}`;
       return [`B${c.label} ${n[2]} 0 V = max(${c.vneg}, min(${c.vpos}, ${c.gain}*(${diff})))`];
     },
@@ -217,7 +233,7 @@ export const PARTS = {
 };
 
 /** Order the palette is presented in. */
-export const PALETTE = ["R", "C", "L", "V", "I", "D", "SW", "AM", "GND", "NPN", "PNP", "NMOS", "PMOS", "OPAMP"];
+export const PALETTE = ["R", "C", "L", "V", "I", "D", "SW", "AM", "GND", "NET", "NPN", "PNP", "NMOS", "PMOS", "OPAMP"];
 
 /* --------------------------------------------------------------- geometry */
 

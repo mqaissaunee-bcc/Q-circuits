@@ -49,6 +49,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   let lastDown = null;     // for detecting a double-click ourselves
   let caret = null;        // grid position for keyboard placement
   let viewLocked = false;  // when set, the sheet ignores wheel and middle-drag
+  let nodeVolts = null;    // node id -> formatted operating-point voltage
   const noteBoxes = new Map();  // note id -> measured bounds, for hit testing
 
   const say = (m) => onStatus?.(m);
@@ -282,6 +283,16 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
         el("circle", { cx: p.x, cy: p.y, r: alone ? 4.5 : 2.6, class: alone ? "pin is-open" : "pin" }, g);
       });
 
+      if (def.caption) {
+        const t = textAnchor(c);
+        const cap = el("text", {
+          x: c.x + 16, y: c.y - 16, class: "net-label",
+          "data-edit": "value", "data-id": c.id
+        }, g);
+        cap.textContent = def.caption(c) || "?";
+        void t;
+      }
+
       if (!def.noLabel) {
         const t = textAnchor(c);
         const lab = el("text", {
@@ -320,14 +331,25 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     const g = el("g", { "aria-hidden": "true" }, svg);
     const shown = new Set();
     store.state.comps.forEach((c) => {
-      if (c.type === "GND") return;
+      if (c.type === "GND" || c.type === "NET") return;
       pinsOf(c).forEach((p, i) => {
         const nd = net.pinNode.get(`${c.id}:${i}`);
-        if (nd === undefined || nd === 0 || shown.has(nd)) return;
+        if (nd === undefined || nd === "0" || shown.has(nd)) return;
         shown.add(nd);
+        // A named node already says what it is; the number would be noise.
+        if (!/^\d+$/.test(nd)) return;
         const t = el("text", { x: p.x + 6, y: p.y - 7, class: "node-tag" }, g);
-        t.textContent = String(nd);
+        t.textContent = nd;
       });
+      if (nodeVolts) {
+        pinsOf(c).forEach((p, i) => {
+          const nd = net.pinNode.get(`${c.id}:${i}`);
+          if (nd === undefined || !nodeVolts.has(nd) || shown.has(`v${nd}`)) return;
+          shown.add(`v${nd}`);
+          const t = el("text", { x: p.x + 6, y: p.y + 16, class: "node-volt" }, g);
+          t.textContent = nodeVolts.get(nd);
+        });
+      }
     });
   }
 
@@ -919,6 +941,15 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     fit,
     isEditing: () => !!editing,
     contentBox,
+
+    /** Show operating-point voltages beside the nodes, the way a bench meter
+     *  reading gets written onto a schematic. Pass null to clear them. */
+    setNodeVoltages(map) {
+      nodeVolts = map && map.size ? map : null;
+      render();
+      return !!nodeVolts;
+    },
+    hasNodeVoltages: () => !!nodeVolts,
 
     /** Freeze the accidental view gestures: wheel zoom and middle-drag pan. */
     setViewLocked(locked) {

@@ -216,7 +216,35 @@ weeks into a course. Failures are translated into what went wrong and what to
 do about it, with the offending netlist line quoted back and the original
 message one click away.
 
-**Labs.** Five guided labs — voltage divider, RC low-pass, half-wave rectifier,
+**Course labs.** The ELEC 101 lab exercises live in `src/labs-elec101.js`,
+ported from the OrCAD Capture originals. What carries over is the electronics.
+What does not is the OrCAD procedure — title blocks, `USER.OLB`, ZIP disks,
+Design Templates — which taught a particular Windows program rather than
+circuits and has no counterpart here.
+
+Three exercise shapes, tagged by `kind` on each lab:
+
+| kind | the student is given | example |
+| --- | --- | --- |
+| `fix` | a circuit drawn with deliberate faults | 4A wiring faults, 4B bad value |
+| `simulate` | a correct circuit, no analysis set up | 5A AC sweep, 5B transient, 5C bias point |
+| `build` | nothing; they draw it | later labs |
+
+A check may set `needsSim: false`, which makes it a reading of the schematic
+rather than of a result. That matters for fault-finding: a broken circuit often
+will not simulate, and a student clicking Check should be told which faults are
+still outstanding rather than handed one engine error. Checks that do need a
+result report that they are waiting for the circuit to run.
+
+**Net labels.** A net label names the node it sits on, so the netlist reads
+`R1 IN 2 2k` rather than `R1 1 2 2k`, and probes and results follow the same
+names. Only unnamed nodes get numbers.
+
+**Node voltages on the schematic.** After an operating point run, Node voltages
+writes each result beside its node, the way a meter reading gets pencilled onto
+a printed schematic.
+
+**Labs.** Five built-in labs — voltage divider, RC low-pass, half-wave rectifier,
 transistor bias, inverting amplifier — each with a starter circuit, tasks, and
 checks that run a real simulation and report against a tolerance.
 
@@ -375,6 +403,26 @@ without the wires.
 
 Alt-drag used to pan. Now that there is a dedicated hand tool and middle-drag
 still pans, Alt-drag is free for the more useful gesture of dragging off a copy.
+
+### Two ways to hang the engine, and the guards against them
+
+Both were found by testing, not by reading; ngspice-WASM does not report either
+as an error. It stops responding, taking the browser thread with it, and the
+tab cannot be recovered.
+
+**Any non-ASCII byte in the netlist.** A student writing `10µF` or `4.7kΩ`, or
+a circuit title containing an em dash, was enough. The netlist is now
+transliterated to ASCII as it is generated — µ becomes `u`, which is what SPICE
+means by it, and Ω is dropped, turning `4.7kΩ` into the `4.7k` that was
+intended. `src/engine.js` sanitises again at the boundary. The student is told
+when a value was converted.
+
+**A loop of voltage sources.** Two sources wired in parallel across the same
+pair of nodes, which is an ordinary student mistake and is exactly fault one of
+Lab 4A. `blockingFaults()` in `src/netlist.js` inspects the circuit and refuses
+the run with an explanation naming both parts. Only genuinely hanging
+constructs belong in that list: a bad value or a dangling node produces a clean
+ngspice error, and a student learns more from seeing the engine report it.
 
 ## Known limits
 

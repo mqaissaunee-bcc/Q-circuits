@@ -597,7 +597,7 @@ check("a lab is not marked passed before it is checked", progress.before === fal
 check("passing every check records the lab", progress.after === true);
 check("the passed lab is ticked in the list", progress.option.includes("\u2713"), progress.option);
 check("the lab panel shows when it was passed", /Passed on/.test(progress.banner), progress.banner);
-check("the tally counts passed labs", /1 of 5 passed/.test(progress.tally), progress.tally);
+check("the tally counts passed labs", /^1 of \d+ passed$/.test(progress.tally), progress.tally);
 
 // Broken connections have to be visible on the drawing, not only in the text
 console.log("\n— showing broken connections —");
@@ -915,6 +915,100 @@ check("the plot PNG has sensible dimensions", plotPng.width > 400 && plotPng.hei
   `${plotPng.width}×${plotPng.height}`);
 check("the plot filename comes from the circuit name",
   plotPng.name === "half-wave-rectifier-waveforms.png", plotPng.name);
+
+/* ------------------------------------------- engine hazards and net labels */
+
+console.log("\n— engine hazards —");
+
+// A non-ASCII byte does not make ngspice-WASM complain: it hangs the thread.
+const ascii = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  S.clear();
+  S.edit(() => {
+    const v = S.addComp("V", 200, 180, "V"); v.rot = 90; v.value = "DC 12";
+    const r = S.addComp("R", 360, 180, "R"); r.rot = 90; r.value = "4.7k\u03A9";
+    S.addComp("GND", 200, 400, "GND");
+    S.addWire(200, 180, 360, 180);
+    S.addWire(360, 240, 360, 400); S.addWire(360, 400, 200, 400);
+    S.addWire(200, 240, 200, 400);
+  }, "t");
+  window.__spiceLab.refresh();
+  return {
+    netlist: document.getElementById("netOut").value,
+    warned: document.getElementById("checks").textContent
+  };
+});
+check("an ohm sign is transliterated out of the netlist",
+  !/[^\x09\x0A\x0D\x20-\x7E]/.test(ascii.netlist) && /4\.7k\b/.test(ascii.netlist),
+  ascii.netlist.split("\n").find((l) => l.startsWith("R")));
+check("the student is told the value was converted", /converted to plain text/.test(ascii.warned));
+
+const survives = await page.evaluate(async () => {
+  const done = await Promise.race([
+    window.__spiceLab.run().then(() => "ran"),
+    new Promise((r) => setTimeout(() => r("hung"), 25000))
+  ]);
+  const res = window.__spiceLab.getResult();
+  return { done, volts: res ? res.traces.length : 0 };
+});
+check("a circuit containing one still simulates rather than hanging",
+  survives.done === "ran" && survives.volts > 0, `${survives.done}, ${survives.volts} vectors`);
+
+// Two sources in parallel spin ngspice forever, so the run is refused first.
+const loop = await page.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  S.clear();
+  S.edit(() => {
+    const a = S.addComp("V", 200, 180, "V"); a.rot = 90; a.value = "DC 12";
+    const b = S.addComp("V", 120, 180, "V"); b.rot = 90; b.value = "DC 12";
+    const r = S.addComp("R", 360, 180, "R"); r.rot = 90;
+    S.addComp("GND", 200, 400, "GND");
+    S.addWire(120, 180, 200, 180); S.addWire(120, 240, 200, 240);
+    S.addWire(200, 180, 360, 180);
+    S.addWire(360, 240, 360, 400); S.addWire(360, 400, 200, 400);
+    S.addWire(200, 240, 200, 400);
+  }, "t");
+  const outcome = await Promise.race([
+    window.__spiceLab.run().then(() => "returned"),
+    new Promise((r) => setTimeout(() => r("hung"), 25000))
+  ]);
+  return { outcome, message: document.querySelector("#runError .engine-error")?.textContent || "" };
+});
+check("a loop of two sources never reaches the engine", loop.outcome === "returned", loop.outcome);
+check("and it says which two parts are the problem",
+  /wired in parallel/.test(loop.message), loop.message.replace(/\s+/g, " ").slice(0, 100));
+
+/* ------------------------------------------------------------- net labels */
+
+console.log("\n— net labels and node voltages —");
+const netLabels = await page.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  document.getElementById("labSelect").value = "elec101-5c";
+  document.getElementById("labSelect").dispatchEvent(new Event("change"));
+  const before = document.getElementById("netOut").value;
+  S.edit(() => {
+    const a = S.addComp("NET", 200, 180, "N"); a.netname = "IN";
+    const b = S.addComp("NET", 540, 180, "N"); b.netname = "OUT";
+  }, "t");
+  window.__spiceLab.refresh();
+  const after = document.getElementById("netOut").value;
+  await window.__spiceLab.run();
+  document.getElementById("btnNodeVolts").click();
+  return {
+    before, after,
+    onSheet: [...document.querySelectorAll("svg.sheet .node-volt")].map((t) => t.textContent),
+    names: [...document.querySelectorAll("svg.sheet .net-label")].map((t) => t.textContent)
+  };
+});
+check("without labels the netlist uses numbers", /R1 1 2 2k/.test(netLabels.before),
+  netLabels.before.split("\n").find((l) => l.startsWith("R1")));
+check("a net label renames the node in the netlist", /^R1 IN \d+ 2k$/m.test(netLabels.after),
+  netLabels.after.split("\n").find((l) => l.startsWith("R1")));
+check("both labels are drawn on the sheet",
+  netLabels.names.includes("IN") && netLabels.names.includes("OUT"), netLabels.names.join(","));
+check("operating-point voltages annotate the schematic",
+  netLabels.onSheet.some((v) => v.startsWith("12")) && netLabels.onSheet.some((v) => v.startsWith("4.5")),
+  netLabels.onSheet.join(" / "));
 
 /* ----------------------------------------------------- unsaved-work guard */
 

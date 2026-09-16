@@ -6,6 +6,8 @@
  * page load. Everything runs in this tab: no circuit ever leaves the browser.
  */
 
+import { toAscii } from "./netlist.js";
+
 let simPromise = null;
 let sim = null;
 
@@ -61,7 +63,9 @@ export async function runNetlist(netlist, onProgress) {
   const s = await startEngine(onProgress);
   onProgress?.("Simulating…");
 
-  s.setNetList(netlist);
+  // Belt and braces: a non-ASCII byte hangs the engine outright, so nothing
+  // reaches it unsanitised even if a caller built the deck by hand.
+  s.setNetList(toAscii(netlist));
   let result;
   try {
     result = await s.runSim();

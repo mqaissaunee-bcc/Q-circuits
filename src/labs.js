@@ -7,9 +7,10 @@
  * for "node 2" does not.
  */
 
-import { buildNodes, buildNetlist, nodesFor, formatEng } from "./netlist.js";
+import { buildNodes, buildNetlist, nodesFor, formatEng, blockingFaults } from "./netlist.js";
 import { runNetlist, findTrace, lastValue } from "./engine.js";
 import { PARTS, netlistNameOf } from "./parts.js";
+import { ELEC101_LABS } from "./labs-elec101.js";
 
 const near = (a, b, tol) => isFinite(a) && Math.abs(a - b) <= tol;
 
@@ -306,7 +307,7 @@ function makeContext(store, result) {
   const v = (label, pin) => {
     const n = node(label, pin);
     if (n === null) return NaN;
-    if (n === 0) return 0;
+    if (n === "0") return 0;
     return lastValue(findTrace(result, `v(${n})`));
   };
 
@@ -316,8 +317,17 @@ function makeContext(store, result) {
     return lastValue(findTrace(result, `i(${netlistNameOf(c).toLowerCase()})`));
   };
 
+  const parts = (type) => store.state.comps.filter((c) => c.type === type);
+
   return {
     result, net, part, node, vname, trace, v, i,
+    parts,
+    count: (type) => parts(type).length,
+    analysis: store.state.analysis,
+    comps: store.state.comps,
+    wires: store.state.wires,
+    /** How many part pins sit on the node a given pin belongs to. */
+    pinCount: (label, pin) => net.pinCount.get(node(label, pin)) || 0,
     value: (s) => {
       const m = String(s ?? "").trim().match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(meg|[tgkmunpf])?/i);
       if (!m) return NaN;
@@ -336,15 +346,40 @@ export async function runChecks(lab, store, onProgress) {
   const analysis = { ...store.state.analysis, ...(lab.analysis || {}) };
   const { text } = buildNetlist(store.state.comps, store.state.wires, analysis, lab.title);
 
-  let result;
-  try {
-    result = await runNetlist(text, onProgress);
-  } catch (e) {
-    return { ok: false, results: [], error: e.message };
+  // A fault-finding lab is checked while the circuit is still broken, so the
+  // engine will often refuse to run. Checks that only read the schematic are
+  // evaluated regardless, and a failed simulation fails only the checks that
+  // actually needed it — otherwise a student sees one opaque error instead of
+  // the list of faults still outstanding.
+  const needsSim = lab.checks.some((chk) => chk.needsSim !== false);
+
+  let result = null;
+  let simError = null;
+  if (needsSim) {
+    // Never hand the engine a circuit that would hang it; a fault-finding lab
+    // is checked precisely while such faults are still present.
+    const net = buildNodes(store.state.comps, store.state.wires);
+    const blocking = blockingFaults(store.state.comps, net);
+    if (blocking.length) {
+      simError = blocking.join(" ");
+    } else {
+      try {
+        result = await runNetlist(text, onProgress);
+      } catch (e) {
+        simError = e.message;
+      }
+    }
   }
 
   const ctx = makeContext(store, result);
   const results = lab.checks.map((chk) => {
+    if (chk.needsSim !== false && !result) {
+      return {
+        label: chk.label,
+        pass: false,
+        detail: "the circuit has to simulate before this can be checked"
+      };
+    }
     try {
       const out = chk.test(ctx);
       return { label: chk.label, pass: !!out.pass, detail: out.detail || "" };
@@ -353,8 +388,17 @@ export async function runChecks(lab, store, onProgress) {
     }
   });
 
-  return { ok: results.every((r) => r.pass), results, error: null, result };
+  return {
+    ok: results.every((r) => r.pass),
+    results,
+    error: null,
+    simError,
+    result
+  };
 }
+
+/** Course labs are kept in their own module and appended here. */
+LABS.push(...ELEC101_LABS);
 
 export function labById(id) {
   return LABS.find((l) => l.id === id) || null;
