@@ -618,3 +618,7 @@ dl.shortcuts kbd {
 .palette-tabs { display: inline-flex; margin-right: var(--sp-2); border-right: 1px solid var(--rule); padding-right: var(--sp-2); }
 .palette-tabs button { min-height: 44px; font-weight: 600; }
 #partTools button[hidden] { display: none; }
+
+/* buses */
+.wire.is-bus { stroke-width: 5; stroke-linecap: square; }
+.preview.is-bus { stroke-width: 5; }

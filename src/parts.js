@@ -7,7 +7,7 @@
  * netlist lines; `models` names any .model cards those lines depend on.
  */
 
-import { gateLines, jkffLines, parseStimulus, stimulusSource, clockSource, RAIL, RAIL_CARD } from "./digital.js";
+import { gateLines, logicLines, logicOf, jkffLines, parseStimulus, stimulusSource, clockSource, RAIL, RAIL_CARD } from "./digital.js";
 
 export const GRID = 20;
 
@@ -26,8 +26,12 @@ export const isVirtual = (c) => !!PARTS[c.type]?.virtual || c.type === "GND";
 export const netNameOf = (c) => {
   const f = PARTS[c.type]?.netName;
   const n = f ? String(f(c) ?? "").trim() : "";
+  if (isBusName(n)) return null;     // a bus label names a bus, not a net
   return n || null;
 };
+
+/** PSpice bus names look like D[0:15]. */
+export const isBusName = (n) => /^[A-Za-z_]\w*\[\d+\s*:\s*\d+\]$/.test(String(n || "").trim());
 
 /* ------------------------------------------------------------------ models */
 
@@ -100,10 +104,18 @@ VLN 0 92 DC 25
 .MODEL QX NPN(IS=800.0E-18 BF=250)
 .ends`;
 
+/*
+ * J2N3819 from the PSpice library, trimmed: its Betatce, Vtotc, Isr, N, Nr,
+ * Xti, Alpha, Vk and M parameters make this ngspice build exit fatally. The
+ * DC behaviour (Beta, Vto, Lambda, Is, Rd, Rs) and capacitances are kept.
+ */
+MODEL_CARDS.J2N3819 = ".model J2N3819 NJF(Beta=1.304m Rd=1 Rs=1 Lambda=2.25m Vto=-3 Is=33.57f Cgd=1.6p Pb=1 Fc=.5 Cgs=2.414p Kf=9.882E-18 Af=1)";
+MODEL_CARDS.D1N914 = ".model D1N914 D(Is=168.1E-21 N=1 Rs=.1 Ikf=0 Xti=3 Eg=1.11 Cjo=4p M=.3333 Vj=.75 Fc=.5 Isr=100p Nr=2 Bv=100 Ibv=100u Tt=11.54n)";
+
 // The rail every digital input is pulled up to, and $D_HI connects to.
 MODEL_CARDS.DIGRAIL = RAIL_CARD;
 
-const DIODE_MODELS = ["Dgen", "D1N4148", "D1N750", "DLED", "DZ5V1"];
+const DIODE_MODELS = ["Dgen", "D1N4148", "D1N914", "D1N750", "DLED", "DZ5V1"];
 const NPN_MODELS = ["QNPN", "Q2N2222", "Q2N3904"];
 const PNP_MODELS = ["QPNP", "Q2N3906"];
 
@@ -151,6 +163,16 @@ const S = {
   JKFF: ["M20 -60H60V60H20Z", "M0 -40H20", "M0 0H12", "M12 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
          "M20 -6L28 0L20 6", "M0 40H20", "M60 -40H80", "M60 40H64", "M64 40a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
          "M72 40H80", "M40 60V64", "M36 68a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M40 72V80"],
+  NJF: ["M0 0H24", "M24 -18V18", "M24 -12H40V-40", "M24 12H40V40", "M16 -4L24 0L16 4Z"],
+  MUX: ["M20 -110H80V150H20Z", "M0 -100H12", "M12 -100a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+        "M0 -80H20", "M0 -60H20", "M0 -40H20", "M0 -20H20", "M0 0H20", "M0 20H20", "M0 40H20", "M0 60H20",
+        "M0 100H20", "M0 120H20", "M0 140H20",
+        "M80 -60H100", "M80 -20H84", "M84 -20a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M92 -20H100"],
+  DEC: ["M20 -170H80V170H20Z", "M0 -100H20", "M0 -80H20", "M0 -60H20", "M0 -40H20",
+        "M0 40H12", "M12 40a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M0 60H12", "M12 60a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+        ...Array.from({ length: 16 }, (_, k) => `M80 ${150 - 20 * k}h4a4 4 0 1 0 8 0a4 4 0 1 0 -8 0M92 ${150 - 20 * k}H100`)],
+  BUSENTRY: ["M0 0L-20 20"],
+  PORT: ["M0 0L12 -10H90V10H12Z"],
   // Digital sources: PSpice's arrow-shaped box, pin at the tip.
   DSRC: ["M-80 -10H-14L0 0L-14 10H-80Z"],
   DHI: ["M-40 -9H-12L0 0L-12 9H-40Z"],
@@ -169,7 +191,7 @@ const S = {
 };
 
 /** Shapes whose closed subpaths should be filled rather than stroked. */
-const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5], XFORM: [8, 9] };
+const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5], XFORM: [8, 9], NJF: [4] };
 
 /* ------------------------------------------------------------------- parts */
 
@@ -532,6 +554,107 @@ export const PARTS = {
     models: () => ["DIGRAIL"]
   },
 
+
+  /** N-channel JFET. */
+  NJF: {
+    key: "NJF", name: "N-channel JFET", prefix: "J", shape: S.NJF,
+    pins: [[0, 0], [40, -40], [40, 40]], pinNames: ["gate", "drain", "source"],
+    box: [-4, -44, 46, 44],
+    fields: [{ k: "model", label: "Model", def: "J2N3819", options: ["J2N3819"],
+               hint: "The PSpice library J2N3819, with the parameters this ngspice build accepts" }],
+    emit: (c, n) => [`${c.label} ${n[1]} ${n[0]} ${n[2]} ${c.model}`],
+    models: (c) => [c.model]
+  },
+
+  /**
+   * 74151A 8-to-1 multiplexer: Z is the input S2 S1 S0 selects, while Ē is
+   * low. Pins as the Lab 13 handout draws them.
+   */
+  MUX151: {
+    key: "MUX151", name: "74151A multiplexer", prefix: "U", shape: S.MUX,
+    pins: [[0, -100], ...Array.from({ length: 8 }, (_, k) => [0, -80 + 20 * k]), [0, 100], [0, 120], [0, 140], [100, -60], [100, -20]],
+    pinNames: ["Ē", "I0", "I1", "I2", "I3", "I4", "I5", "I6", "I7", "S0", "S1", "S2", "Z", "Z̄"],
+    box: [-4, -114, 104, 154],
+    digital: true, optionalPins: [12, 13],
+    fields: [{ k: "device", label: "Device", def: "74151A", options: ["74151A"], hint: "8-line to 1-line data selector" }],
+    texts: () => [
+      { x: 26, y: -100, text: "E̅", cls: "pin-name" },
+      ...Array.from({ length: 8 }, (_, k) => ({ x: 26, y: -80 + 20 * k, text: `I${k}`, cls: "pin-name" })),
+      { x: 26, y: 100, text: "S0", cls: "pin-name" }, { x: 26, y: 120, text: "S1", cls: "pin-name" },
+      { x: 26, y: 140, text: "S2", cls: "pin-name" },
+      { x: 74, y: -60, text: "Z", cls: "pin-name", anchor: "end" }, { x: 74, y: -20, text: "Z̄", cls: "pin-name", anchor: "end" }
+    ],
+    emit: (c, n) => {
+      const s = logicOf;
+      const sel = (k) => [9, 10, 11].map((pin, b) => ((k >> b) & 1 ? s(n[pin]) : `(1-${s(n[pin])})`)).join("*");
+      const expr = `(1-${s(n[0])})*(${Array.from({ length: 8 }, (_, k) => `${s(n[1 + k])}*${sel(k)}`).join("+")})`;
+      return [
+        ...logicLines(`G${c.label}_z`, expr, n.slice(0, 12), n[12]),
+        ...logicLines(`G${c.label}_zb`, `(1-${expr})`, [], n[13])
+      ];
+    },
+    summary: () => "74151A",
+    netlistName: (c) => `BG${c.label}_z`,
+    models: () => ["DIGRAIL"]
+  },
+
+  /**
+   * 74154 4-to-16 decoder: output Yk goes low when D C B A = k and both
+   * Ḡ1 and Ḡ2 are low; every other output is high.
+   */
+  DEC154: {
+    key: "DEC154", name: "74154 decoder", prefix: "U", shape: S.DEC,
+    pins: [[0, -40], [0, -60], [0, -80], [0, -100], [0, 60], [0, 40],
+      ...Array.from({ length: 16 }, (_, k) => [100, 150 - 20 * k])],
+    pinNames: ["A", "B", "C", "D", "Ḡ1", "Ḡ2", ...Array.from({ length: 16 }, (_, k) => `Y${k}`)],
+    box: [-4, -174, 104, 174],
+    digital: true, optionalPins: Array.from({ length: 16 }, (_, k) => 6 + k),
+    fields: [{ k: "device", label: "Device", def: "74154", options: ["74154"], hint: "4-line to 16-line decoder, active-low outputs" }],
+    texts: () => [
+      ...["A", "B", "C", "D"].map((t, i) => ({ x: 26, y: -40 - 20 * i, text: t, cls: "pin-name" })),
+      { x: 26, y: 60, text: "G̅1", cls: "pin-name" }, { x: 26, y: 40, text: "G̅2", cls: "pin-name" },
+      ...Array.from({ length: 16 }, (_, k) => ({ x: 74, y: 150 - 20 * k, text: `Y${k}`, cls: "pin-name", anchor: "end" }))
+    ],
+    emit: (c, n) => {
+      const s = logicOf;
+      const en = `(1-${s(n[4])})*(1-${s(n[5])})`;
+      return Array.from({ length: 16 }, (_, k) => {
+        const match = [0, 1, 2, 3].map((b) => ((k >> b) & 1 ? s(n[b]) : `(1-${s(n[b])})`)).join("*");
+        return logicLines(`G${c.label}_y${k}`, `(1-${en}*${match})`, k ? [] : n.slice(0, 6), n[6 + k]);
+      }).flat();
+    },
+    summary: () => "74154",
+    netlistName: (c) => `BG${c.label}_y0`,
+    models: () => ["DIGRAIL"]
+  },
+
+  /**
+   * Bus entry: the short diagonal that ties a wire to a bus. Only the wire
+   * end is a connection; the signal reaches the bus by its net name.
+   */
+  BUSENTRY: {
+    key: "BUSENTRY", name: "Bus entry", prefix: "BE", shape: S.BUSENTRY,
+    pins: [[0, 0]], pinNames: ["wire"],
+    virtual: true, noLabel: true, countsAsPin: true,
+    box: [-22, -2, 2, 22],
+    fields: [],
+    busEnd: [-20, 20],
+    emit: () => [], models: () => []
+  },
+
+  /** PSpice's PORTLEFT-L and PORTRIGHT-R: a named connection drawn as an arrow. */
+  PORT: {
+    key: "PORT", name: "Port", prefix: "PORT", shape: S.PORT,
+    pins: [[0, 0]], pinNames: ["net"],
+    virtual: true, noLabel: true, countsAsPin: true,
+    box: [-2, -12, 92, 12],
+    fields: [{ k: "name", label: "Port name", def: "OUT",
+               hint: "Connects by name, like a net alias. Rotate it 180° for a PORTRIGHT" }],
+    netName: (c) => c.name,
+    texts: (c) => [{ x: 50, y: 0, text: c.name || "?", cls: "net-name", anchor: "middle", field: "name" }],
+    emit: () => [], models: () => []
+  },
+
   /** STIM1: a digital input described by time/value commands. */
   STIM: withSourceName({
     key: "STIM", name: "Digital stimulus", prefix: "DSTM", shape: S.DSRC,
@@ -592,7 +715,7 @@ export const PARTS = {
   NET: {
     key: "NET", name: "Net alias", prefix: "NET", shape: S.NET,
     pins: [[0, 0]], pinNames: ["net"],
-    upright: true, virtual: true, noLabel: true,
+    upright: true, virtual: true, noLabel: true, countsAsPin: true,
     boxFor: (c) => [-6, -22, Math.max(14, 9 * String(c.name || "?").length + 6), 4],
     fields: [{ k: "name", label: "Net name", def: "",
                hint: "Every alias with this name is the same node. Letters, digits and _ only" }],
@@ -605,7 +728,7 @@ export const PARTS = {
   PWR: {
     key: "PWR", name: "Power symbol", prefix: "PWR", shape: S.PWR,
     pins: [[0, 0]], pinNames: ["net"],
-    virtual: true, noLabel: true,
+    virtual: true, noLabel: true, countsAsPin: true,
     box: [-16, -38, 16, 3],
     fields: [{ k: "name", label: "Net name", def: "VCC",
                hint: "Every power symbol and net alias with this name is the same node. Rotate to 180° for a VEE bar" }],
@@ -646,13 +769,13 @@ export const PARTS = {
 /** The palette's two tabs. Ground and net aliases belong to both. */
 export const PALETTE_TABS = {
   analog: ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR",
-    "NPN", "PNP", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM"],
-  digital: ["GATE2", "GATE3", "INV", "JKFF", "STIM", "DCLK", "DHI", "NET", "GND"]
+    "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM"],
+  digital: ["GATE2", "GATE3", "INV", "JKFF", "MUX151", "DEC154", "STIM", "DCLK", "DHI", "BUSENTRY", "PORT", "NET", "GND"]
 };
 
 /** Order the palette is presented in. */
-export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR", "NPN", "PNP", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM",
-  "GATE2", "GATE3", "INV", "JKFF", "STIM", "DCLK", "DHI"];
+export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR", "PORT", "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM",
+  "GATE2", "GATE3", "INV", "JKFF", "MUX151", "DEC154", "STIM", "DCLK", "DHI", "BUSENTRY"];
 
 /** Parts that make a circuit digital, for the plot's logic lanes. */
 export const isDigital = (c) => !!PARTS[c.type]?.digital;
@@ -669,11 +792,25 @@ export function rotatePoint(px, py, rot) {
   }
 }
 
+/**
+ * Mirror a local point, as PSpice's Mirror Horizontally (mx, left–right) and
+ * Mirror Vertically (my, top–bottom) do. Mirroring happens before rotation.
+ */
+export function mirrorPoint(px, py, comp) {
+  return [comp.mx ? -px : px, comp.my ? -py : py];
+}
+
+/** Local point to world offset: mirror, then rotate. */
+export function placePoint(px, py, comp, rot = comp.rot || 0) {
+  const [mx, my] = mirrorPoint(px, py, comp);
+  return rotatePoint(mx, my, rot);
+}
+
 /** World-space pin coordinates for a placed part. */
 export function pinsOf(comp) {
   const def = PARTS[comp.type];
   return def.pins.map(([px, py]) => {
-    const [rx, ry] = rotatePoint(px, py, comp.rot || 0);
+    const [rx, ry] = placePoint(px, py, comp);
     return { x: comp.x + rx, y: comp.y + ry };
   });
 }
@@ -684,7 +821,7 @@ export function boxOf(comp, pad = 2) {
   const [x0, y0, x1, y1] = def.boxFor ? def.boxFor(comp) : def.box;
   const rot = def.upright ? 0 : comp.rot || 0;
   const pts = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
-    .map(([px, py]) => rotatePoint(px, py, rot));
+    .map(([px, py]) => (def.upright ? [px, py] : placePoint(px, py, comp, rot)));
   const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
   return {
     x0: comp.x + Math.min(...xs) - pad,

@@ -8,7 +8,7 @@
  * makes a wire ending part-way along another wire behave as a real tee.
  */
 
-import { PARTS, MODEL_CARDS, pinsOf, boxOf, netlistNameOf, isVirtual, netNameOf } from "./parts.js";
+import { PARTS, MODEL_CARDS, pinsOf, boxOf, netlistNameOf, isVirtual, netNameOf, isBusName, placePoint } from "./parts.js";
 import { parseStimulus } from "./digital.js";
 
 /* ----------------------------------------------------------- connectivity */
@@ -22,7 +22,10 @@ function onSegment(p, w) {
   return Math.abs(cross) < 1;
 }
 
-export function buildNodes(comps, wires) {
+export function buildNodes(comps, allWires) {
+  // A bus is drawn, not wired: signals join it by name, as in PSpice, so it
+  // takes no part in connectivity.
+  const wires = allWires.filter((w) => !w.bus);
   const pts = [];
   comps.forEach((c) => {
     pinsOf(c).forEach((p, i) => pts.push({ x: p.x, y: p.y, comp: c, pin: i }));
@@ -109,7 +112,9 @@ export function buildNodes(comps, wires) {
   const pinCount = new Map();     // node -> how many part pins touch it
   comps.forEach((c) => {
     const def = PARTS[c.type];
-    if (isVirtual(c) && !def.countsAsPin) return;
+    // Labels and ports count as a connection, except a bus label, which
+    // names a bus rather than a net.
+    if (isVirtual(c) && !(def.countsAsPin && (!def.netName || netNameOf(c)))) return;
     pinsOf(c).forEach((_, i) => {
       const nd = pinNode.get(`${c.id}:${i}`);
       // An output nobody listens to is normal (a flip-flop's Q̄), so it
@@ -129,7 +134,10 @@ export function buildNodes(comps, wires) {
  * out, so it gets a prefix.
  */
 export function spiceNodeName(name) {
-  const clean = String(name).trim().replace(/[^A-Za-z0-9_]/g, "_");
+  // vin+ and vin- must stay two nodes, so the signs get names of their own.
+  const clean = String(name).trim()
+    .replace(/\+/g, "_p").replace(/-/g, "_n")
+    .replace(/[^A-Za-z0-9_]/g, "_");
   return /^\d+$/.test(clean) ? `N${clean}` : clean;
 }
 
@@ -253,7 +261,7 @@ export function validate(comps, wires, net, analysis) {
       if (["R", "C", "L"].includes(c.type) && /\s/.test(v)) {
         msgs.push({ level: "error", text: `${c.label} is "${v}". Take out the space: SPICE reads "${v.split(/\s+/)[0]}" as the value and the rest as something else.` });
       }
-      if ((f.k === "name") && !/^[A-Za-z0-9_]+$/.test(v)) {
+      if ((f.k === "name") && !/^[A-Za-z0-9_+-]+$/.test(v) && !isBusName(v)) {
         msgs.push({ level: "warn", text: `The name "${v}" has characters SPICE cannot use in a node name. Stick to letters, digits and _.` });
       }
     });
@@ -303,12 +311,40 @@ export function validate(comps, wires, net, analysis) {
     msgs.push({ level: "warn", text: `One node carries several names: ${names.join(", ")}. It is called ${spiceNodeName(names[0])} in the netlist.` });
   });
 
+  const buses = wires.filter((w) => w.bus);
+  const onBus = (pt) => buses.some((b) => onSegment(pt, b));
   comps.forEach((c) => {
     if (!PARTS[c.type].netName) return;
     const p = pinsOf(c)[0];
+    if (isBusName(c.name)) {
+      if (!onBus(p)) msgs.push({ level: "warn", text: `${c.name} is a bus name, so it belongs on a bus.` });
+      return;
+    }
+    if (onBus(p)) {
+      msgs.push({ level: "warn", text: `The alias ${c.name} sits on a bus. A bus takes a name like D[0:15]; single signals are named on their own wires.` });
+      return;
+    }
     if ((net.degree.get(`${p.x},${p.y}`) || 0) < 2) {
       msgs.push({ level: "warn", text: `The ${PARTS[c.type].name.toLowerCase()} ${c.name || ""} is not touching a wire or a pin, so it names nothing.` });
     }
+  });
+
+  // Bus entries: the wire end is the connection; the other end must touch a bus.
+  comps.forEach((c) => {
+    if (c.type !== "BUSENTRY") return;
+    const [dx, dy] = placePoint(...PARTS.BUSENTRY.busEnd, c);
+    if (!onBus({ x: c.x + dx, y: c.y + dy })) {
+      msgs.push({ level: "warn", text: "A bus entry does not reach a bus. Its diagonal end should touch the bus line." });
+    }
+  });
+  // A wire run straight onto a bus is not connected to it.
+  wires.forEach((w) => {
+    if (w.bus) return;
+    [[w.x1, w.y1], [w.x2, w.y2]].forEach(([x, y]) => {
+      if (onBus({ x, y }) && (net.degree.get(`${x},${y}`) || 0) < 2) {
+        msgs.push({ level: "warn", text: `A wire ends on a bus at ${x}, ${y}. Wires join a bus only through a bus entry and a net name.` });
+      }
+    });
   });
 
   // {NAME} values need a PARAMETERS block that defines NAME.

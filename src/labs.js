@@ -19,8 +19,8 @@
 
 import { buildNodes, nodesFor, nodeAtPoint, formatEng, parseValue, paramValues } from "./netlist.js";
 import { lastValue } from "./engine.js";
-import { PARTS, pinsOf, netNameOf } from "./parts.js";
-import { parseStimulus, logicOf, RAIL } from "./digital.js";
+import { PARTS, pinsOf, netNameOf, placePoint } from "./parts.js";
+import { parseStimulus, levelOf as logicOf, RAIL } from "./digital.js";
 import { simulate, traceAt, probeTraceName } from "./simulate.js";
 
 const near = (a, b, tol) => isFinite(a) && Math.abs(a - b) <= tol;
@@ -384,6 +384,7 @@ function makeContext(state, result, ref) {
   const openEnds = () => {
     const out = [];
     state.wires.forEach((w) => {
+      if (w.bus) return;
       [[w.x1, w.y1], [w.x2, w.y2]].forEach(([x, y]) => {
         if ((net.degree.get(`${x},${y}`) || 0) < 2) out.push(`a wire end at ${x}, ${y}`);
       });
@@ -767,6 +768,53 @@ const K = {
         for (let t = step / 2; t < until; t += step) {
           if (level(points, t) !== level(ref, t)) {
             return { pass: false, detail: `at ${formatEng(t, 3)} s it is ${level(points, t)}; the table says ${level(ref, t)}` };
+          }
+        }
+        return { pass: true, detail: "" };
+      }
+    };
+  },
+
+  /**
+   * Named signals reach a bus: each has a bus entry on its wire, and the
+   * entry's far end is on a bus line.
+   */
+  bus(names) {
+    return {
+      label: `${names[0]} to ${names[names.length - 1]} each reach a bus through a bus entry`,
+      test: (ctx) => {
+        const buses = ctx.state.wires.filter((w) => w.bus);
+        if (!buses.length) return { pass: false, detail: "there is no bus on the sheet. Use the Bus tool (Y)" };
+        const entries = ctx.state.comps.filter((c) => c.type === "BUSENTRY");
+        const onBus = (x, y) => buses.some((b) => Math.min(b.x1, b.x2) <= x && x <= Math.max(b.x1, b.x2) &&
+          Math.min(b.y1, b.y2) <= y && y <= Math.max(b.y1, b.y2) &&
+          (b.x1 === b.x2 ? x === b.x1 : y === b.y1));
+        for (const n of names) {
+          const node = ctx.named(n);
+          if (node === undefined) return { pass: false, detail: `nothing is named ${n}` };
+          const e = entries.find((c) => ctx.net.pinNode.get(`${c.id}:0`) === node);
+          if (!e) return { pass: false, detail: `${n} has no bus entry` };
+          const [dx, dy] = placePoint(...PARTS.BUSENTRY.busEnd, e);
+          if (!onBus(e.x + dx, e.y + dy)) return { pass: false, detail: `the bus entry on ${n} does not reach the bus` };
+        }
+        return { pass: true, detail: "" };
+      }
+    };
+  },
+
+  /** Parts mirrored (or not) as the handout asks: { label: { mx, my } }. */
+  mirrored(want, label) {
+    return {
+      label,
+      test: (ctx) => {
+        for (const [ref, flags] of Object.entries(want)) {
+          const c = ctx.part(ref);
+          if (!c) return { pass: false, detail: `there is no part called ${ref}` };
+          for (const [k, v] of Object.entries(flags)) {
+            if (!!c[k] !== v) {
+              const how = k === "mx" ? "left to right (⇆)" : "top to bottom (⇅)";
+              return { pass: false, detail: `${ref} should ${v ? "" : "not "}be mirrored ${how}` };
+            }
           }
         }
         return { pass: true, detail: "" };
@@ -1166,9 +1214,10 @@ const CLK = (off, on, start, opp) => ({ offtime: off, ontime: on, delay: "0", st
 const CLEAR_CMDS = "0s 1; 2.2m 0; 2.3m 1; 7.9m 0; 8.6m 1";
 
 /** Q3 Q2 Q1 Q0 as a number at time t. */
-function countAt(ctx, t, res = ctx.ref) {
-  return ["Q0", "Q1", "Q2", "Q3"].reduce((sum, q, i) => sum + (logicAt(ctx, res, q, t) << i), 0);
+function countAt(ctx, t, res = ctx.ref, names = ["Q0", "Q1", "Q2", "Q3"]) {
+  return names.reduce((sum, q, i) => sum + (logicAt(ctx, res, q, t) << i), 0);
 }
+const BCD = ["QA", "QB", "QC", "QD"];
 
 /* Lab 12 */
 const SUPPLY_SPLIT = { VS1: { dc: 18, type: "V" }, VS2: { dc: 18, type: "V" } };
@@ -2301,7 +2350,251 @@ const ELEC101 = [
         return { pass: near(g, a.gain, 0.6), detail: isFinite(g) ? `OUT peaks at ${formatEng(g, 3)} dB` : "no AC result at OUT" };
       })
     ]
-  }))
+  })),
+
+  /* --------------------------------------------------------- Lab 13 */
+  {
+    id: "e101-13a",
+    group: "e101-13",
+    code: "13A",
+    kind: "draw",
+    title: "13A · 16-line multiplexer with a bus",
+    summary: "Two 74151A 8-to-1 selectors make a 16-to-1 multiplexer. The sixteen data lines come off a bus, and a 7402 combines the two outputs. S3 enables one chip or the other.",
+    tasks: [
+      "Type LAB 13A in the circuit name box.",
+      "Place two 74151A multiplexers, U1 above U2, from the Digital tab.",
+      "Pick Bus (Y) and draw a vertical bus to the left of both. Optionally name it D[0:15] with a net alias on the bus.",
+      "For each data input, place a Bus entry with its diagonal end on the bus, and run a wire from it to the input. U1's I0–I7 take D0–D7; U2's I0–I7 take D8–D15. Name each wire D0 … D15 with a net alias: the name is what connects a wire to a bus.",
+      "Run select lines S0, S1 and S2 to both chips' S0, S1, S2 pins, and name them. Where they cross the data wires there must be no dot.",
+      "S3 goes straight to U1's Ē, and through a 7404 inverter (U3A) to U2's Ē.",
+      "Wire both Z outputs into a 7402 NOR (U4A), and its output to a Port named MUXOutput. The Z̄ outputs stay open.",
+      "Optionally, add Text labels such as Data Bus and Select Inputs, as the handout does."
+    ],
+    circuit: blank("13A"),
+    simulate: false,
+    checks: [
+      K.title("13A"),
+      K.parts({ U1: { type: "MUX151" }, U2: { type: "MUX151" }, U3A: { type: "INV" }, U4A: { type: "GATE2", fields: { device: "7402" } } },
+        "U1 and U2 are 74151As, U3A a 7404 and U4A a 7402"),
+      K.pins("U1", Object.fromEntries(Array.from({ length: 8 }, (_, k) => [1 + k, `D${k}`])), "U1's inputs I0–I7 are D0–D7"),
+      K.pins("U2", Object.fromEntries(Array.from({ length: 8 }, (_, k) => [1 + k, `D${8 + k}`])), "U2's inputs I0–I7 are D8–D15"),
+      K.pins("U1", { 9: "S0", 10: "S1", 11: "S2", 0: "S3" }, "U1's selects are S0–S2 and its enable is S3"),
+      K.pins("U2", { 9: "S0", 10: "S1", 11: "S2" }, "U2's selects are S0–S2"),
+      K.gate("U3A", ["S3"], ["U2", 0]),
+      K.gate("U4A", [["U1", 12], ["U2", 12]], "MUXOutput"),
+      K.bus(Array.from({ length: 16 }, (_, k) => `D${k}`)),
+      K.noOpenEnds()
+    ]
+  },
+
+  {
+    id: "e101-13b",
+    group: "e101-13",
+    code: "13B",
+    kind: "draw",
+    title: "13B · 16-line demultiplexer with a bus",
+    summary: "A 74154 decoder sends the multiplexed signal back out to one of sixteen lines. Its outputs are active low, so each passes through a 7404 before it joins the data bus.",
+    tasks: [
+      "Type LAB 13B in the circuit name box.",
+      "Place a 74154 decoder, U1. Wire its A, B, C and D inputs to wires named S0, S1, S2 and S3.",
+      "Place a Port, rotate it 180° so it points right, name it MUXInput, and wire it to both Ḡ1 and Ḡ2.",
+      "Place sixteen 7404 inverters, one per output. The handout names them U2A–U2F, U3A–U3F and U4A–U4D; standing them upright (press O) keeps the drawing narrow, as the handout's does.",
+      "Wire each output Yk to its own inverter, and each inverter's output to a wire named Dk.",
+      "Draw a vertical bus on the right. Each Dk wire reaches it through a Bus entry (⇆ points the entries the other way).",
+      "Where wires cross there must be no dot."
+    ],
+    circuit: blank("13B"),
+    simulate: false,
+    checks: [
+      K.title("13B"),
+      {
+        label: "U1 is a 74154, with sixteen 7404 inverters",
+        test: (ctx) => {
+          const u = ctx.part("U1");
+          const n = ctx.count("INV");
+          if (!u || u.type !== "DEC154") return { pass: false, detail: "U1 should be a 74154 decoder" };
+          return { pass: n === 16, detail: `there ${n === 1 ? "is" : "are"} ${n} inverter${n === 1 ? "" : "s"}` };
+        }
+      },
+      K.pins("U1", { 0: "S0", 1: "S1", 2: "S2", 3: "S3", 4: "MUXInput", 5: "MUXInput" }, "A–D are S0–S3, and both enables are on MUXInput"),
+      {
+        label: "Each output Yk passes through its own inverter to Dk",
+        test: (ctx) => {
+          const u = ctx.part("U1");
+          if (!u) return { pass: false, detail: "there is no U1" };
+          const nodes = nodesFor(u, ctx.net);
+          const invs = ctx.real.filter((c) => c.type === "INV").map((c) => nodesFor(c, ctx.net));
+          for (let k = 0; k < 16; k++) {
+            const y = nodes[6 + k];
+            const inv = invs.find(([i]) => i === y);
+            if (!inv) return { pass: false, detail: `no inverter takes Y${k}` };
+            const d = ctx.named(`D${k}`);
+            if (d === undefined) return { pass: false, detail: `nothing is named D${k}` };
+            if (inv[1] !== d) return { pass: false, detail: `the inverter on Y${k} drives ${ctx.describeNode(inv[1])}, not D${k}` };
+          }
+          return { pass: true, detail: "" };
+        }
+      },
+      K.bus(Array.from({ length: 16 }, (_, k) => `D${k}`)),
+      K.noOpenEnds()
+    ]
+  },
+
+  {
+    id: "e101-13c",
+    group: "e101-13",
+    code: "13C",
+    kind: "draw",
+    title: "13C · Glitchless MOD 10 counter",
+    summary: "A synchronous decade counter: 11D's four flip-flops with gating that sends the count from 9 back to 0. Draw it, then run it to watch it count.",
+    tasks: [
+      "Type LAB 13C in the circuit name box.",
+      "Place four 7473s (U1A, U1B, U2A, U2B), four 7408 ANDs (U3A–U3D) and a 7432 OR (U4A). Name the Q outputs QA, QB, QC and QD.",
+      "Place a $D_HI on U1A's J and K, and tie every CLR to it. Place a DigClock, DSTM1 (OFFTIME .5m, ONTIME .5m, STARTVAL 1, OPPVAL 0), and run its wire, named CLOCK, to every CLK.",
+      "U3A takes QA and QD's Q̄ (U2B's Q̄ output); it drives U1B's J and K.",
+      "U3B takes U3A's output and QB; it drives U2A's J and K.",
+      "U3C takes QD and QA. U3D takes U3B's output and QC. U4A takes both, and drives U2B's J and K.",
+      "In Analysis, choose Transient: stop time 12m, time step 0.1m, Initialize flip-flops to 0. Probe CLOCK, QD, QC, QB and QA, and run.",
+      "Read QD QC QB QA as a binary number to answer the questions."
+    ],
+    questions: [
+      { id: "c42", prompt: "The count at 4.2 ms", abs: 0, expect: (ctx) => countAt(ctx, 4.2e-3, ctx.ref, BCD) },
+      { id: "c92", prompt: "The count at 9.2 ms", abs: 0, expect: (ctx) => countAt(ctx, 9.2e-3, ctx.ref, BCD) },
+      { id: "c102", prompt: "The count at 10.2 ms, one clock later", abs: 0, expect: (ctx) => countAt(ctx, 10.2e-3, ctx.ref, BCD) }
+    ],
+    circuit: blank("13C"),
+    useStudentAnalysis: true,
+    reference: { type: "tran", trStep: "0.05m", trStop: "12m", trUic: false, ffInit: "0" },
+    checks: [
+      K.title("13C"),
+      K.parts({
+        U1A: { type: "JKFF" }, U1B: { type: "JKFF" }, U2A: { type: "JKFF" }, U2B: { type: "JKFF" },
+        U3A: { type: "GATE2", fields: { device: "7408" } }, U3B: { type: "GATE2", fields: { device: "7408" } },
+        U3C: { type: "GATE2", fields: { device: "7408" } }, U3D: { type: "GATE2", fields: { device: "7408" } },
+        U4A: { type: "GATE2", fields: { device: "7432" } },
+        DSTM1: { type: "DCLK", fields: CLK(".5m", ".5m", 1, 0) }
+      }, "Every part has the part number and settings from the handout"),
+      K.wiring([["DSTM1", ["CLOCK"], true]], "The clock drives CLOCK"),
+      K.pins("U1A", { 0: RAIL, 1: "CLOCK", 2: RAIL, 3: RAIL, 4: "QA" }, "U1A: J and K high, clocked, output QA"),
+      K.gate("U3A", ["QA", ["U2B", 5]], ["U1B", 0]),
+      K.pins("U1B", { 1: "CLOCK", 2: ["U1B", 0], 3: RAIL, 4: "QB" }, "U1B: J and K from U3A, output QB"),
+      K.gate("U3B", [["U1B", 0], "QB"], ["U2A", 0]),
+      K.pins("U2A", { 1: "CLOCK", 2: ["U2A", 0], 3: RAIL, 4: "QC" }, "U2A: J and K from U3B, output QC"),
+      K.gate("U3C", ["QD", "QA"], ["U3C", 2]),
+      K.gate("U3D", [["U2A", 0], "QC"], ["U3D", 2]),
+      K.gate("U4A", [["U3C", 2], ["U3D", 2]], ["U2B", 0]),
+      K.pins("U2B", { 1: "CLOCK", 2: ["U2B", 0], 3: RAIL, 4: "QD" }, "U2B: J and K from U4A, output QD"),
+      K.tran(12e-3, 0.1e-3),
+      K.ffInit("0"),
+      {
+        label: "Voltage probes on CLOCK, QD, QC, QB and QA",
+        test: (ctx) => {
+          const missing = ["CLOCK", "QD", "QC", "QB", "QA"].filter((n) => !ctx.probeOn(n));
+          return { pass: !missing.length, detail: missing.length ? `no probe on ${missing.join(", ")} yet` : "" };
+        }
+      },
+      K.sim("It counts 0 to 9 and starts again", (ctx) => {
+        const got = Array.from({ length: 11 }, (_, i) => countAt(ctx, i * 1e-3 + 0.2e-3, ctx.result, BCD));
+        const want = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
+        const ok = got.every((v, i) => v === want[i]);
+        return { pass: ok, detail: ok ? "" : `the counts are ${got.join(", ")}` };
+      })
+    ]
+  },
+
+  /* --------------------------------------------------------- Lab 14 */
+  {
+    id: "e101-14a",
+    group: "e101-14",
+    code: "14A",
+    kind: "draw",
+    title: "14A · Instrumentation amplifier",
+    summary: "Three LM324s: two buffered inputs with a shared gain resistor RB, then a difference amplifier. A resistor bridge supplies the two inputs, with R2 set by the RVAL parameter.",
+    tasks: [
+      "Type LAB 14A in the circuit name box.",
+      "Place the split supply: VS1 and VS2 (DC 18) with VCC and VEE power symbols and the junction grounded.",
+      "Draw the bridge: VS (DC 6) across two dividers, R1 over R3 and R2 over R4, all 10k except R2 = {RVAL}. Place a Parameter part: RVAL = 10k.",
+      "Place three LM324s. Select U1A and press ⇅ (Mirror vertically) so its + input is on top; U1B and U1C stay as placed.",
+      "The R2–R4 junction is IN-, to U1A's + input. The R1–R3 junction is IN+, to U1B's + input. The IN+ wire crosses the R2–R4 line without joining it: no dot.",
+      "RA1 (10k), RB (1k) and RA2 (10k) run in a column from U1A's output to U1B's output. U1A's − input joins the RA1–RB junction, and U1B's − input joins the RB–RA2 junction.",
+      "RIN1 (10k) runs from U1A's output to U1C's − input, and RF1 (1MEG) from there to OUT. RIN2 (10k) runs from U1B's output to U1C's + input, and RF2 (1MEG) from there to ground.",
+      "Power every op-amp from VCC and VEE, and name U1C's output OUT."
+    ],
+    circuit: blank("14A"),
+    simulate: false,
+    checks: [
+      K.title("14A"),
+      K.parts({
+        ...SUPPLY_SPLIT, VS: { dc: 6, type: "V" },
+        R1: "10k", R2: { text: "{rval}" }, R3: "10k", R4: "10k",
+        RA1: "10k", RB: "1k", RA2: "10k", RIN1: "10k", RF1: "1meg", RIN2: "10k", RF2: "1meg",
+        U1A: LM, U1B: LM, U1C: LM
+      }),
+      PARAM_IS("RVAL", 10e3),
+      K.wiring([
+        ...SUPPLY_WIRING,
+        ["R1", [["VS", 0], "IN+"]], ["R3", ["IN+", ["VS", 1]]],
+        ["R2", [["VS", 0], "IN-"]], ["R4", ["IN-", ["VS", 1]]],
+        ["RA1", [["U1A", 2], ["U1A", 0]]], ["RB", [["U1A", 0], ["U1B", 0]]], ["RA2", [["U1B", 0], ["U1B", 2]]],
+        ["RIN1", [["U1A", 2], ["U1C", 0]]], ["RF1", [["U1C", 0], "OUT"]],
+        ["RIN2", [["U1B", 2], ["U1C", 1]]], ["RF2", [["U1C", 1], 0]]
+      ]),
+      K.pins("U1A", { 1: "IN-", 3: "VCC", 4: "VEE" }, "U1A's + input is IN-, and it is powered from VCC and VEE"),
+      K.pins("U1B", { 1: "IN+", 3: "VCC", 4: "VEE" }, "U1B's + input is IN+, and it is powered from VCC and VEE"),
+      K.pins("U1C", { 2: "OUT", 3: "VCC", 4: "VEE" }, "U1C's output is OUT, and it is powered from VCC and VEE"),
+      K.mirrored({ U1A: { my: true }, U1B: { my: false }, U1C: { my: false } }, "U1A is mirrored so its + input is on top; U1B and U1C are not"),
+      K.noOpenEnds()
+    ]
+  },
+
+  {
+    id: "e101-14b",
+    group: "e101-14",
+    code: "14B",
+    kind: "draw",
+    title: "14B · Inside an operational amplifier",
+    summary: "A discrete op-amp: a JFET differential pair with a transistor current source, a second differential stage, a level shifter and an emitter-follower output. Twelve resistors, eight transistors, three diodes, and wires that sometimes cross and sometimes join.",
+    tasks: [
+      "Type LAB 14B in the circuit name box.",
+      "Place every part first, lining up the columns as Figure 14-2 does: R1–R12, J1 and J2 (N-channel JFET, J2N3819), Q1–Q6 (NPN, Q2N2222), D1 and D2 (D1N914) and D3 (D1N750).",
+      "Select J2 and Q3 and press ⇆ (Mirror horizontally), so J2's gate and Q3's base face right.",
+      "Draw a vcc rail across the top and a vee rail across the bottom, and label them with power symbols named vcc and vee. Add power symbols named vin+, vin- and vo for the inputs and output.",
+      "Wire it as Figure 14-2 shows. Check every crossing against the figure: a dot means the wires join; no dot means they only cross.",
+      "The front end: R1, D1 and D3 bias Q1, whose collector feeds both JFET sources. vin+ drives J1's gate and vin- J2's gate. R2 and R3 load the drains.",
+      "The second stage: J2's drain drives Q2's base, and J1's drain crosses over to Q3's base. R4 and R5 are the collector loads; the emitters share R7.",
+      "The output: Q3's collector drives Q4. R8, D2 and R9 bias Q5 under R10 and R11. Q4's emitter, through R10, drives Q6's base, and Q6's emitter is vo, loaded by R12.",
+      "Like the handout's, this circuit has no ground: its supplies and inputs come from outside the sheet. Parts and connections will say No ground, and that is expected here. The lab is marked on the drawing."
+    ],
+    circuit: blank("14B"),
+    simulate: false,
+    checks: [
+      K.title("14B"),
+      K.parts({
+        R1: "15.3k", R2: "10k", R3: "10k", R4: "10k", R5: "10k", R6: "4k", R7: "14.3k",
+        R8: "14.3k", R9: "5k", R10: "3.6k", R11: "5k", R12: "10k",
+        J1: { type: "NJF", model: "J2N3819" }, J2: { type: "NJF", model: "J2N3819" },
+        ...Object.fromEntries(["Q1", "Q2", "Q3", "Q4", "Q5", "Q6"].map((q) => [q, { type: "NPN", model: "Q2N2222" }])),
+        D1: { type: "D", model: "D1N914" }, D2: { type: "D", model: "D1N914" }, D3: { type: "D", model: "D1N750" }
+      }),
+      K.wiring([
+        ["R1", ["vcc", ["Q1", 0]]], ["D1", [["Q1", 0], ["D3", 1]], true], ["D3", ["vee", ["D1", 1]], true],
+        ["R6", [["Q1", 2], "vee"]],
+        ["R2", ["vcc", ["J1", 1]]], ["R3", ["vcc", ["J2", 1]]],
+        ["R4", ["vcc", ["Q2", 1]]], ["R5", ["vcc", ["Q3", 1]]], ["R7", [["Q2", 2], "vee"]],
+        ["R10", [["Q4", 2], ["Q5", 1]]],
+        ["R8", ["vcc", ["Q5", 0]]], ["D2", [["Q5", 0], ["R9", 0]], true], ["R9", [["D2", 1], "vee"]],
+        ["R11", [["Q5", 2], "vee"]], ["R12", ["vo", "vee"]]
+      ], "The resistors and diodes connect as Figure 14-2 shows"),
+      K.pins("J1", { 0: "vin+", 2: ["Q1", 1] }, "J1: gate on vin+, source on Q1's collector"),
+      K.pins("J2", { 0: "vin-", 2: ["Q1", 1] }, "J2: gate on vin-, source shared with J1"),
+      K.pins("Q2", { 0: ["J2", 1], 2: ["Q3", 2] }, "Q2's base is J2's drain, and the emitters of Q2 and Q3 are joined"),
+      K.pins("Q3", { 0: ["J1", 1] }, "Q3's base is J1's drain, by the wire that crosses over"),
+      K.pins("Q4", { 0: ["Q3", 1], 1: "vcc" }, "Q4: base on Q3's collector, collector on vcc"),
+      K.pins("Q6", { 0: ["Q5", 1], 1: "vcc", 2: "vo" }, "Q6: base on Q5's collector, collector on vcc, emitter on vo"),
+      K.mirrored({ J2: { mx: true }, Q3: { mx: true } }, "J2 and Q3 are mirrored horizontally, as the handout asks"),
+      K.noOpenEnds()
+    ]
+  }
 ];
 
 
@@ -2752,6 +3045,207 @@ const D12E = join(SPLIT, STAGE(240, "U1A"), STAGE(560, "U1B"), {
   probes: [vp(880, 120)]
 });
 
+/* Lab 13 */
+const BE = (x, y, mx = false) => P("BUSENTRY", x, y, 0, { label: `BE_${x}_${y}`, ...(mx ? { mx: true } : {}) });
+const BUS = (x1, y1, x2, y2) => ({ ...W(x1, y1, x2, y2), bus: true });
+const PORTP = (x, y, name, rot = 0) => P("PORT", x, y, rot, { label: `PORT_${name}`, name });
+
+const D13A = (() => {
+  // U2 sits two grid rows lower than U1's mirror image, so the inverter
+  // feeding its enable clears the data rows.
+  const comps = [
+    P("MUX151", 300, 200, 0, { label: "U1", device: "74151A" }),
+    P("MUX151", 300, 580, 0, { label: "U2", device: "74151A" }),
+    P("INV", 220, 440, 0, { label: "U3A", device: "7404" }),
+    P("GATE2", 480, 300, 0, { label: "U4A", device: "7402" }),
+    PORTP(600, 300, "MUXOutput"),
+    NET(100, 100, "D[0:15]"),
+    NET(140, 760, "S0"), NET(160, 780, "S1"), NET(180, 800, "S2"), NET(200, 820, "S3")
+  ];
+  const wires = [
+    BUS(100, 100, 100, 680),
+    // selects: S0–S2 up to both chips, S3 to U1's enable and the inverter
+    W(140, 760, 140, 300), W(140, 300, 300, 300), W(140, 680, 300, 680),
+    W(160, 780, 160, 320), W(160, 320, 300, 320), W(160, 700, 300, 700),
+    W(180, 800, 180, 340), W(180, 340, 300, 340), W(180, 720, 300, 720),
+    W(200, 820, 200, 100), W(200, 100, 300, 100), W(200, 440, 220, 440), W(300, 440, 300, 480),
+    // outputs into the NOR
+    W(400, 140, 440, 140), W(440, 140, 440, 280), W(440, 280, 480, 280),
+    W(400, 520, 440, 520), W(440, 520, 440, 320), W(440, 320, 480, 320),
+    W(560, 300, 600, 300)
+  ];
+  for (let k = 0; k < 8; k++) {
+    const y1 = 120 + 20 * k, y2 = 500 + 20 * k;
+    // Labels at x = 240, clear of the select lines at 140–200: a label
+    // dropped where a wire crosses would sit on, and join, both.
+    comps.push(BE(120, y1), BE(120, y2), NET(240, y1, `D${k}`), NET(240, y2, `D${8 + k}`));
+    wires.push(W(120, y1, 300, y1), W(120, y2, 300, y2));
+  }
+  return { comps, wires, probes: [], notes: [] };
+})();
+
+const D13B = (() => {
+  const comps = [
+    P("DEC154", 200, 400, 0, { label: "U1", device: "74154" }),
+    PORTP(100, 440, "MUXInput", 180),
+    NET(140, 360, "S0"), NET(140, 340, "S1"), NET(140, 320, "S2"), NET(140, 300, "S3"),
+    NET(1000, 20, "D[0:15]")
+  ];
+  const wires = [
+    W(140, 360, 200, 360), W(140, 340, 200, 340), W(140, 320, 200, 320), W(140, 300, 200, 300),
+    W(100, 440, 200, 440), W(160, 440, 160, 460), W(160, 460, 200, 460),
+    BUS(1000, 20, 1000, 780)
+  ];
+  const invName = (k) => (k < 6 ? `U2${"ABCDEF"[k]}` : k < 12 ? `U3${"ABCDEF"[k - 6]}` : `U4${"ABCD"[k - 12]}`);
+  for (let k = 0; k < 16; k++) {
+    const y = 550 - 20 * k;                          // Yk pin row
+    const top = k >= 8;
+    const x = top ? 340 + 60 * (15 - k) : 340 + 60 * k;
+    const d = top ? 60 + 20 * (15 - k) : 760 - 20 * k;   // Dk row
+    const out = top ? y - 80 : y + 80;
+    comps.push(P("INV", x, y, top ? 270 : 90, { label: invName(k), device: "7404" }));
+    comps.push(BE(980, d, true), NET(940, d, `D${k}`));
+    wires.push(W(300, y, x, y), W(x, out, x, d), W(x, d, 980, d));
+  }
+  return { comps, wires, probes: [] };
+})();
+
+const FF13 = (x, label) => P("JKFF", x, 300, 0, { label, device: "7473" });
+const AND = (x, y, label) => P("GATE2", x, y, 0, { label, device: "7408" });
+const D13C = {
+  comps: [
+    FF13(200, "U1A"), FF13(460, "U1B"), FF13(720, "U2A"), FF13(1000, "U2B"),
+    AND(340, 160, "U3A"), AND(600, 160, "U3B"), AND(880, 60, "U3C"), AND(880, 160, "U3D"),
+    P("GATE2", 1000, 120, 0, { label: "U4A", device: "7432" }),
+    P("DHI", 140, 260, 0, { label: "HI1" }),
+    DCLK(120, 480, "DSTM1", ".5m", ".5m", 1, 0),
+    NET(140, 480, "CLOCK"), NET(300, 60, "QA"), NET(560, 60, "QB"), NET(820, 60, "QC"), NET(1100, 0, "QD")
+  ],
+  wires: [
+    // logic 1 and the clear bus
+    W(140, 260, 200, 260), W(160, 260, 160, 340), W(160, 340, 200, 340), W(160, 340, 160, 420),
+    W(160, 420, 1040, 420),
+    W(240, 380, 240, 420), W(500, 380, 500, 420), W(760, 380, 760, 420), W(1040, 380, 1040, 420),
+    // clock bus
+    W(120, 480, 960, 480),
+    W(180, 480, 180, 300), W(180, 300, 200, 300),
+    W(440, 480, 440, 300), W(440, 300, 460, 300),
+    W(680, 480, 680, 300), W(680, 300, 720, 300),
+    W(960, 480, 960, 300), W(960, 300, 1000, 300),
+    // QA, and on to U3A and U3C
+    W(280, 260, 300, 260), W(300, 60, 300, 260), W(300, 140, 340, 140), W(300, 80, 880, 80),
+    // QD̄ back round the bottom to U3A
+    W(1080, 340, 1120, 340), W(1120, 340, 1120, 540), W(1120, 540, 320, 540), W(320, 540, 320, 180), W(320, 180, 340, 180),
+    // T1 to U1B's J and K, and on to U3B
+    W(420, 120, 420, 160), W(420, 160, 420, 260), W(420, 260, 420, 340), W(420, 260, 460, 260), W(420, 340, 460, 340),
+    W(420, 120, 580, 120), W(580, 120, 580, 140), W(580, 140, 600, 140),
+    // QB
+    W(540, 260, 560, 260), W(560, 60, 560, 260), W(560, 180, 600, 180),
+    // T2 to U2A's J and K, and on to U3D
+    W(680, 160, 700, 160), W(700, 100, 700, 160), W(700, 160, 700, 260), W(700, 260, 700, 340),
+    W(700, 260, 720, 260), W(700, 340, 720, 340),
+    W(700, 100, 860, 100), W(860, 100, 860, 140), W(860, 140, 880, 140),
+    // QC
+    W(800, 260, 820, 260), W(820, 60, 820, 260), W(820, 180, 880, 180),
+    // QD to U3C
+    W(1080, 260, 1100, 260), W(1100, 0, 1100, 260), W(1100, 0, 860, 0), W(860, 0, 860, 40), W(860, 40, 880, 40),
+    // U3C and U3D into the OR, and the OR to U2B's J and K
+    W(960, 60, 980, 60), W(980, 60, 980, 100), W(980, 100, 1000, 100),
+    W(960, 160, 980, 160), W(980, 160, 980, 140), W(980, 140, 1000, 140),
+    W(1080, 120, 1080, 200), W(1080, 200, 980, 200), W(980, 200, 980, 260), W(980, 260, 1000, 260),
+    W(980, 260, 980, 340), W(980, 340, 1000, 340)
+  ],
+  probes: [vp(140, 480), vp(1100, 0), vp(820, 60), vp(560, 60), vp(300, 60)]
+};
+
+/* Lab 14 */
+const D14A = join(SPLIT, {
+  comps: [
+    P("PARAM", 260, 120, 0, { label: "PARAM1", name: "RVAL", value: "10k" }),
+    V_(180, 300, "VS", "DC 6"),
+    R_(260, 240, 90, "R1", "10k"), R_(340, 240, 90, "R2", "{RVAL}"),
+    R_(260, 380, 90, "R3", "10k"), R_(340, 380, 90, "R4", "10k"),
+    { ...U_(500, 160, "U1A"), my: true }, U_(500, 480, "U1B"), U_(800, 320, "U1C"),
+    PWR(540, 100, "VEE"), PWR(540, 220, "VCC", 180),
+    PWR(540, 420, "VCC"), PWR(540, 540, "VEE", 180),
+    PWR(840, 260, "VCC"), PWR(840, 380, "VEE", 180),
+    R_(640, 200, 90, "RA1", "10k"), R_(640, 300, 90, "RB", "1k"), R_(640, 400, 90, "RA2", "10k"),
+    R_(680, 160, 0, "RIN1", "10k"), R_(800, 160, 0, "RF1", "1MEG"),
+    R_(680, 480, 0, "RIN2", "10k"), R_(800, 480, 0, "RF2", "1MEG"), G(880, 480, 270),
+    NET(420, 140, "IN-"), NET(400, 500, "IN+"), NET(920, 160, "OUT")
+  ],
+  wires: [
+    // bridge
+    W(180, 300, 180, 200), W(180, 200, 340, 200), W(260, 200, 260, 240), W(340, 200, 340, 240),
+    W(260, 300, 260, 380), W(340, 300, 340, 380),
+    W(180, 360, 180, 480), W(180, 480, 340, 480), W(260, 440, 260, 480), W(340, 440, 340, 480),
+    // IN- to U1A's +, IN+ across the R2–R4 line (no junction) to U1B's +
+    W(340, 320, 420, 320), W(420, 320, 420, 140), W(420, 140, 500, 140),
+    W(260, 360, 400, 360), W(400, 360, 400, 500), W(400, 500, 500, 500),
+    // U1A and the gain column
+    W(540, 100, 540, 120), W(540, 200, 540, 220),
+    W(580, 160, 640, 160), W(640, 160, 640, 200), W(640, 260, 640, 300),
+    W(640, 280, 480, 280), W(480, 280, 480, 180), W(480, 180, 500, 180),
+    W(640, 360, 640, 400), W(640, 380, 480, 380), W(480, 380, 480, 460), W(480, 460, 500, 460),
+    W(640, 460, 640, 480), W(580, 480, 640, 480),
+    W(540, 420, 540, 440), W(540, 520, 540, 540),
+    // difference amplifier
+    W(640, 160, 680, 160), W(740, 160, 800, 160), W(760, 160, 760, 300), W(760, 300, 800, 300),
+    W(860, 160, 920, 160), W(920, 160, 920, 320), W(880, 320, 920, 320),
+    W(640, 480, 680, 480), W(740, 480, 800, 480), W(860, 480, 880, 480),
+    W(760, 480, 760, 340), W(760, 340, 800, 340),
+    W(840, 260, 840, 280), W(840, 360, 840, 380)
+  ],
+  probes: []
+});
+
+const N_ = (x, y, label, mx = false) => P("NPN", x, y, 0, { label, model: "Q2N2222", ...(mx ? { mx: true } : {}) });
+const J_ = (x, y, label, mx = false) => P("NJF", x, y, 0, { label, model: "J2N3819", ...(mx ? { mx: true } : {}) });
+const D_ = (x, y, rot, label, model) => P("D", x, y, rot, { label, model });
+const D14B = {
+  comps: [
+    PWR(620, 40, "vcc"), PWR(620, 720, "vee", 180),
+    PWR(40, 300, "vin+", 270), PWR(40, 380, "vin-", 270), PWR(1200, 480, "vo", 90),
+    R_(100, 100, 90, "R1", "15.3k"), D_(100, 500, 90, "D1", "D1N914"), D_(100, 680, 270, "D3", "D1N750"),
+    N_(300, 440, "Q1"), R_(340, 560, 90, "R6", "4k"),
+    J_(240, 300, "J1"), J_(440, 300, "J2", true),
+    R_(280, 100, 90, "R2", "10k"), R_(400, 100, 90, "R3", "10k"),
+    N_(560, 200, "Q2"), N_(720, 200, "Q3", true),
+    R_(600, 80, 90, "R4", "10k"), R_(680, 80, 90, "R5", "10k"), R_(640, 560, 90, "R7", "14.3k"),
+    N_(940, 140, "Q4"), R_(980, 240, 90, "R10", "3.6k"),
+    R_(860, 300, 90, "R8", "14.3k"), D_(860, 500, 90, "D2", "D1N914"), R_(860, 600, 90, "R9", "5k"),
+    N_(940, 440, "Q5"), R_(980, 560, 90, "R11", "5k"),
+    N_(1100, 360, "Q6"), R_(1140, 560, 90, "R12", "10k")
+  ],
+  wires: [
+    // rails
+    W(100, 40, 1140, 40), W(100, 720, 1140, 720),
+    W(100, 40, 100, 100), W(280, 40, 280, 100), W(400, 40, 400, 100),
+    W(600, 40, 600, 80), W(680, 40, 680, 80), W(860, 40, 860, 300), W(980, 40, 980, 100), W(1140, 40, 1140, 320),
+    // front end
+    W(100, 160, 100, 440), W(100, 440, 100, 500), W(100, 440, 300, 440),
+    W(100, 560, 100, 620), W(100, 680, 100, 720),
+    W(340, 480, 340, 560), W(340, 620, 340, 720),
+    W(40, 300, 240, 300),
+    W(40, 380, 480, 380), W(480, 380, 480, 300), W(480, 300, 440, 300),
+    W(280, 340, 280, 360), W(280, 360, 400, 360), W(400, 340, 400, 360), W(340, 360, 340, 400),
+    W(280, 160, 280, 260), W(400, 160, 400, 260),
+    // second stage
+    W(400, 200, 560, 200),
+    W(280, 220, 500, 220), W(500, 220, 500, 420), W(500, 420, 780, 420), W(780, 420, 780, 200), W(780, 200, 720, 200),
+    W(600, 140, 600, 160), W(680, 140, 680, 160),
+    W(600, 240, 600, 280), W(600, 280, 680, 280), W(680, 240, 680, 280), W(640, 280, 640, 560), W(640, 620, 640, 720),
+    // output stages
+    W(680, 140, 940, 140),
+    W(980, 180, 980, 240), W(980, 300, 980, 400), W(980, 360, 1100, 360),
+    W(860, 360, 860, 440), W(860, 440, 940, 440), W(860, 440, 860, 500),
+    W(860, 560, 860, 600), W(860, 660, 860, 720),
+    W(980, 480, 980, 560), W(980, 620, 980, 720),
+    W(1140, 400, 1140, 560), W(1140, 620, 1140, 720), W(1140, 480, 1200, 480)
+  ],
+  probes: []
+};
+
 const DIAGRAMS = {
   "e101-04a": D04A, "e101-04b": D04B,
   "e101-05a": D05A, "e101-05b": D05B, "e101-05c": D05C,
@@ -2762,7 +3256,8 @@ const DIAGRAMS = {
   "e101-10a": D10_2("7432", "Q"), "e101-10b": D10_2("7402", "QBAR"),
   "e101-10c": D10_3("7411", "Q"), "e101-10d": D10_3("7410", "QBAR"), "e101-10e": D10E,
   "e101-11a": D11A, "e101-11b": D11B, "e101-11c": D11C, "e101-11d": D11D,
-  "e101-12a": D12A, "e101-12b": D12B, "e101-12c": D12C, "e101-12d": D12D, "e101-12e": D12E
+  "e101-12a": D12A, "e101-12b": D12B, "e101-12c": D12C, "e101-12d": D12D, "e101-12e": D12E,
+  "e101-13a": D13A, "e101-13b": D13B, "e101-13c": D13C, "e101-14a": D14A, "e101-14b": D14B
 };
 
 export const DIAGRAM_CAPTIONS = {
@@ -2790,7 +3285,9 @@ export const LAB_GROUPS = [
   { id: "e101-9", title: "ELEC 101 · Lab 9 — Transient analysis" },
   { id: "e101-10", title: "ELEC 101 · Lab 10 — Logic gates" },
   { id: "e101-11", title: "ELEC 101 · Lab 11 — Digital circuits" },
-  { id: "e101-12", title: "ELEC 101 · Lab 12 — Transistor and op-amp amplifiers" }
+  { id: "e101-12", title: "ELEC 101 · Lab 12 — Transistor and op-amp amplifiers" },
+  { id: "e101-13", title: "ELEC 101 · Lab 13 — Buses, multiplexers and counters" },
+  { id: "e101-14", title: "ELEC 101 · Lab 14 — Instrumentation and operational amplifiers" }
 ];
 
 export const LAB_KINDS = {

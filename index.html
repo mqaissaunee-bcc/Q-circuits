@@ -45,6 +45,8 @@
     <div class="tool-group" id="modeTools" role="group" aria-label="Modes">
       <button type="button" data-tool="select" aria-pressed="true">Select<kbd>S</kbd></button>
       <button type="button" data-tool="wire" aria-pressed="false">Wire<kbd>W</kbd></button>
+      <button type="button" data-tool="bus" aria-pressed="false"
+              title="Draw a bus: a thick line that carries signals joined to it by name">Bus<kbd>Y</kbd></button>
       <button type="button" data-tool="probe" aria-pressed="false">Probe<kbd>B</kbd></button>
       <button type="button" data-tool="vdiff" aria-pressed="false"
               title="Differential voltage probe: click the + side, then the − side">Diff probe<kbd>X</kbd></button>
@@ -60,15 +62,15 @@
       <button type="button" id="btnUndo" class="ghost" disabled>Undo<kbd>⌘Z</kbd></button>
       <button type="button" id="btnRedo" class="ghost" disabled>Redo</button>
       <button type="button" id="btnRotate" class="ghost">Rotate<kbd>O</kbd></button>
+      <button type="button" id="btnMirrorH" class="ghost" aria-label="Mirror horizontally" title="Mirror horizontally: swap left and right">⇆</button>
+      <button type="button" id="btnMirrorV" class="ghost" aria-label="Mirror vertically" title="Mirror vertically: swap top and bottom">⇅</button>
       <button type="button" id="btnDelete" class="ghost danger">Delete<kbd>⌫</kbd></button>
     </div>
     <div class="tool-group" role="group" aria-label="View">
       <button type="button" id="btnZoomIn" class="ghost" aria-label="Zoom in">+</button>
       <button type="button" id="btnZoomOut" class="ghost" aria-label="Zoom out">−</button>
       <button type="button" id="btnFit" class="ghost">Fit</button>
-    </div>
-    <div class="tool-group">
-      <button type="button" id="btnHelp" class="ghost" aria-haspopup="dialog">Shortcuts<kbd>?</kbd></button>
+      <button type="button" id="btnHelp" class="ghost" aria-haspopup="dialog" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
     </div>
     <div class="tool-group" id="partTools" role="group" aria-label="Parts"></div>
   </div>
@@ -328,6 +330,7 @@
         <dl class="shortcuts">
           <dt><kbd>S</kbd></dt><dd>Select</dd>
           <dt><kbd>W</kbd></dt><dd>Wire</dd>
+          <dt><kbd>Y</kbd></dt><dd>Bus</dd>
           <dt><kbd>B</kbd></dt><dd>Probe: a wire for volts, a part body for amps</dd>
           <dt><kbd>X</kbd></dt><dd>Differential probe: + side, then − side</dd>
           <dt><kbd>T</kbd></dt><dd>Text annotation</dd>
@@ -357,6 +360,7 @@
           <dt><kbd>⌘C</kbd> <kbd>⌘X</kbd> <kbd>⌘V</kbd></dt><dd>Copy, cut, paste</dd>
           <dt><kbd>⌘A</kbd></dt><dd>Select everything</dd>
           <dt><kbd>O</kbd></dt><dd>Rotate the selection, or the next part</dd>
+          <dt>⇆ / ⇅</dt><dd>Mirror the selected parts left–right or top–bottom</dd>
           <dt><kbd>Delete</kbd></dt><dd>Delete the selection</dd>
           <dt><kbd>Esc</kbd></dt><dd>Back to Select, cancel a wire run</dd>
         </dl>

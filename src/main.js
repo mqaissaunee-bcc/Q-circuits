@@ -120,7 +120,9 @@ function shortName(def) {
     "Net alias": "Net alias", "Power symbol": "Power", Parameter: "Param",
     "Pulse source": "Pulse", Transformer: "Xfmr",
     "2-input gate": "Gate", "3-input gate": "Gate3", Inverter: "NOT", "JK flip-flop": "7473",
-    "Digital stimulus": "STIM1", "Digital clock": "DigClock", "Logic 1 ($D_HI)": "$D_HI"
+    "Digital stimulus": "STIM1", "Digital clock": "DigClock", "Logic 1 ($D_HI)": "$D_HI",
+    "N-channel JFET": "NJF", "74151A multiplexer": "74151A", "74154 decoder": "74154",
+    "Bus entry": "Bus entry", Port: "Port"
   };
   return map[def.name] || def.name;
 }
@@ -152,6 +154,12 @@ $("btnDelete").addEventListener("click", () => {
 $("btnRotate").addEventListener("click", () => {
   if (store.selection.size) { store.rotateSelection(); say("Rotated."); }
   else say(`Placement angle is now ${canvas.rotateGhost()} degrees.`);
+});
+["h", "v"].forEach((axis) => {
+  $(axis === "h" ? "btnMirrorH" : "btnMirrorV").addEventListener("click", () => {
+    if (store.mirrorSelection(axis)) say(axis === "h" ? "Mirrored left to right. Check the wires still meet the pins." : "Mirrored top to bottom. Check the wires still meet the pins.");
+    else say("Select a part to mirror.");
+  });
 });
 const VIEW_LOCK_KEY = "q-circuits-viewlock-v1";
 
@@ -198,7 +206,7 @@ const TOOL_KEYS = {
   s: "select", w: "wire", b: "probe", r: "R", c: "C", n: "L",
   v: "V", i: "I", d: "D", g: "GND", q: "NPN", m: "NMOS", u: "OPAMP",
   a: "AM", h: "pan", z: "zoomrect", t: "text",
-  k: "NET", p: "PWR", x: "vdiff"
+  k: "NET", p: "PWR", x: "vdiff", y: "bus"
 };
 
 document.addEventListener("keydown", (evt) => {

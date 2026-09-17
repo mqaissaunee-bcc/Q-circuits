@@ -71,6 +71,25 @@ export function gateLines(name, fn, ins, out, { pullups = true } = {}) {
   return lines;
 }
 
+/** The smoothed logic level of a node, as an expression from 0 to 1. */
+export const logicOf = (n) => s(n);
+
+/**
+ * A logic element with an arbitrary expression (0 to 1) over smoothed
+ * inputs, for parts too wide to build gate by gate. `ins` get pull-ups.
+ */
+export function logicLines(name, expr, ins, out) {
+  const lines = [
+    `B${name} ${name}_o 0 V = ${LOGIC_HIGH}*(${expr})`,
+    `R${name}_d ${name}_o ${out} 1k`,
+    `C${name}_d ${out} 0 ${delayCap(name)}`
+  ];
+  ins.forEach((n, i) => {
+    if (n !== 0 && n !== "0") lines.push(`R${name}_pu${i} ${n} ${RAIL} 1meg`);
+  });
+  return lines;
+}
+
 /**
  * A 7473: negative-edge (pulse-triggered, master–slave) JK flip-flop with an
  * active-low clear, built from nine gates the way the chip is.
@@ -170,4 +189,4 @@ export function clockSource(name, node, { delay, ontime, offtime, startval, oppv
 }
 
 /** Read a logic level from a voltage, as the plot and the checks do. */
-export const logicOf = (v) => (v > LOGIC_HIGH / 2 ? 1 : 0);
+export const levelOf = (v) => (v > LOGIC_HIGH / 2 ? 1 : 0);

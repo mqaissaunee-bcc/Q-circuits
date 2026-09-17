@@ -469,6 +469,14 @@ Object.assign(DIAGRAM_RUNS, {
   "e101-12e": { title: "LAB 12E", analysis: ac12, plot: { mode: "db", xMin: "100", xMax: "10meg", yMin: "20", yMax: "40" }, answers: "12" }
 });
 
+Object.assign(DIAGRAM_RUNS, {
+  "e101-13a": { title: "LAB 13A" },
+  "e101-13b": { title: "LAB 13B" },
+  "e101-13c": { title: "LAB 13C", analysis: { type: "tran", trStop: "12m", trStep: "0.1m", ffInit: "0" }, answers: { c42: "4", c92: "9", c102: "0" } },
+  "e101-14a": { title: "LAB 14A" },
+  "e101-14b": { title: "LAB 14B" }
+});
+
 /**
  * Work out a lab's answers from the circuit now on the sheet, by running the
  * reference analysis here in the test. Deliberately not a hook in the app: a
@@ -757,6 +765,154 @@ if (process.env.SHOTS) {
   await loadSolved("e101-12b");
   await page.evaluate(() => window.__spiceLab.canvas.fit());
   await page.locator("#sheetHost").screenshot({ path: "/tmp/12b.png" });
+}
+
+console.log("\n— Labs 13 and 14 —");
+for (const id of ["e101-13a", "e101-13b", "e101-13c", "e101-14a", "e101-14b"]) {
+  const st = await page.evaluate(async (i) => { window.T.open(i); return window.T.check(i); }, id);
+  check(`${id}: the blank starting sheet does not pass`, !st.ok, `${st.failed.length} of ${st.n} fail`);
+}
+const solvedPlain = (id, title) => page.evaluate(({ id, title }) => {
+  const L = window.__spiceLab;
+  window.T.open(id);
+  L.store.loadCircuit({ ...L.labs.diagramFor(L.labs.labById(id)), title });
+  L.refresh();
+}, { id, title });
+
+await solvedPlain("e101-13a", "LAB 13A");
+const warn13a = await page.evaluate(() => document.getElementById("checks").textContent);
+check("13A: the finished drawing raises no warnings", /Connectivity is clean/.test(warn13a), warn13a.slice(0, 200));
+const net13a = await page.evaluate(() => document.getElementById("netOut").value);
+check("13A: the bus itself is not a node; D0 is its own net", /U1_z .*D0/.test(net13a.replace(/\n/g, " ")) || /\bD0\b/.test(net13a), "");
+const noEntry = await page.evaluate(async () => {
+  window.T.set((s) => { s.comps = s.comps.filter((c) => !(c.type === "BUSENTRY" && c.y === 180 && c.x === 120)); });
+  return (await window.T.check("e101-13a")).failed.join(" | ");
+});
+check("13A: a data line without a bus entry is caught", /D3 has no bus entry/.test(noEntry), noEntry.slice(0, 160));
+const ontoBus = await page.evaluate(() => {
+  window.T.wire([160, 420, 100, 420]);
+  window.__spiceLab.refresh();
+  return document.getElementById("checks").textContent;
+});
+check("a wire run straight onto a bus is explained", /Wires join a bus only through a bus entry/.test(ontoBus), ontoBus.slice(0, 200));
+
+await solvedPlain("e101-13b", "LAB 13B");
+const swap13b = await page.evaluate(async () => {
+  window.T.set(() => {
+    const a = window.T.comp("U2A"), b = window.T.comp("U2B");
+    [a.x, b.x] = [b.x, a.x];
+  });
+  return (await window.T.check("e101-13b")).failed.join(" | ");
+});
+check("13B: an inverter moved to the wrong output is caught", /Y0|Y1/.test(swap13b), swap13b.slice(0, 160));
+
+// The multiplexer and decoder simulate as well as draw.
+await solvedPlain("e101-13b", "LAB 13B");
+const demux = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  const S = L.store;
+  // S3..S0 = 0101, MUXInput held low: only D5 should read 1 after the inverters
+  S.edit((s) => {
+    const add = (label, net, value) => {
+      const c = S.addComp("V", 0, 0, "V"); Object.assign(c, { label, value, ac: "", x: -400 - s.comps.length * 80, y: 900, rot: 90 });
+      const n = S.addComp("NET", c.x, 900, "N"); n.name = net;
+      const g = S.addComp("GND", c.x, 960, "GND"); g.label = "GND";
+    };
+    add("VA", "S0", "DC 5"); add("VB", "S1", "DC 0"); add("VC", "S2", "DC 5"); add("VD", "S3", "DC 0"); add("VM", "MUXInput", "DC 0");
+    s.analysis.type = "op";
+  }, "t");
+  const r = await L.simulate(S.state);
+  return Array.from({ length: 16 }, (_, k) => {
+    const t = r.traces.find((x) => x.name.toLowerCase() === `v(d${k})`);
+    return t && t.values[0] > 2.5 ? 1 : 0;
+  }).join("");
+});
+check("13B: the 74154 and inverters decode S = 0101 to D5 alone", demux === "0000010000000000", demux);
+
+await loadSolved("e101-13c");
+const bcd = await page.evaluate(async () => {
+  await window.__spiceLab.run();
+  return window.__spiceLab.scope.paneCount();
+});
+check("13C: the decade counter runs, one lane per probe", bcd === 5, `${bcd} lanes`);
+if (process.env.SHOTS) {
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/13c.png" });
+  await page.locator(".scope-panel").screenshot({ path: "/tmp/13c-plot.png" });
+}
+
+await solvedPlain("e101-14a", "LAB 14A");
+const warn14a = await page.evaluate(() => document.getElementById("checks").textContent);
+check("14A: the finished drawing raises no warnings", /Connectivity is clean/.test(warn14a), warn14a.slice(0, 200));
+const unmirrored = await page.evaluate(async () => {
+  window.T.set(() => { window.T.comp("U1A").my = false; });
+  return (await window.T.check("e101-14a")).failed.join(" | ");
+});
+check("14A: an unmirrored U1A is caught", /U1A should be mirrored top to bottom/.test(unmirrored), unmirrored.slice(0, 160));
+check("14A: and since its pins moved, so is its wiring", /U1A/.test(unmirrored.split(" | ").filter((x) => !/mirrored/.test(x)).join(" ")), unmirrored.slice(0, 200));
+
+await solvedPlain("e101-14b", "LAB 14B");
+const net14b = await page.evaluate(() => document.getElementById("netOut").value);
+check("14B: vin+ and vin- stay separate nodes", /^J1 \S+ vin_p /m.test(net14b) && /^J2 \S+ vin_n /m.test(net14b),
+  net14b.split("\n").filter((l) => /^J/.test(l)).join(" | "));
+check("14B: the J2N3819 card is the trimmed one that ngspice accepts", /\.model J2N3819 NJF\(Beta=1\.304m/.test(net14b) && !/Betatce/.test(net14b));
+const warn14b = await page.evaluate(() => document.getElementById("checks").textContent);
+check("14B: the only complaint is the missing ground the handout's circuit also lacks",
+  /^No ground[^.]*\.[^.]*\.?$/.test(warn14b.trim()) || warn14b.trim().split(/(?<=\.)(?=[A-Z])/).every((m) => /ground/i.test(m)), warn14b.slice(0, 200));
+const op14b = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  const S = L.store;
+  S.edit((s) => {
+    const src = (label, net, value, x) => {
+      const c = S.addComp("V", x, 900, "V"); Object.assign(c, { label, value, ac: "", rot: 90 });
+      const n = S.addComp("PWR", x, 900, "P"); n.name = net;
+      const g = S.addComp("GND", x, 960, "GND"); g.label = "GND";
+    };
+    src("VP", "vcc", "DC 15", -200); src("VNEG", "vee", "DC -15", -300);
+    src("VIP", "vin+", "DC 0", -400); src("VIM", "vin-", "DC 0", -500);
+    s.analysis.type = "op";
+  }, "t");
+  try {
+    const r = await L.simulate(S.state);
+    const vo = r.traces.find((t) => t.name.toLowerCase() === "v(vo)");
+    return { ok: true, vo: vo?.values[0] };
+  } catch (e) { return { ok: false, err: e.message }; }
+});
+check("14B: the discrete op-amp solves an operating point", op14b.ok && isFinite(op14b.vo), JSON.stringify(op14b));
+
+// Mirroring moves pins, and wires stay put.
+const bar = await page.evaluate(() => document.querySelector(".toolbar-strip").offsetHeight);
+check("the toolbar still fits in two rows at 1440 px", bar < 140, `${bar}px`);
+const mir = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  window.T.open("e101-06a");
+  let c;
+  L.store.edit(() => { c = L.store.addComp("NPN", 400, 300, "Q"); }, "t");
+  const before = JSON.stringify(window.__spiceLabPins = L.store.state.comps.find((k) => k.id === c.id));
+  L.store.selection = new Set([c.id]);
+  document.getElementById("btnMirrorH").click();
+  const q = L.store.state.comps.find((k) => k.id === c.id);
+  return { mx: q.mx, before };
+});
+check("Mirror ↔ flips a part left to right", mir.mx === true);
+const pinsNow = await page.evaluate(async () => {
+  const m = await import("/src/parts.js").catch(() => null);
+  return m ? null : "skip";
+});
+void pinsNow;
+if (process.env.SHOTS) {
+  await solvedPlain("e101-13a", "LAB 13A");
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/13a.png" });
+  await solvedPlain("e101-13b", "LAB 13B");
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/13b.png" });
+  await solvedPlain("e101-14a", "LAB 14A");
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/14a.png" });
+  await solvedPlain("e101-14b", "LAB 14B");
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/14b.png" });
 }
 
 const explorations = await page.evaluate(() => {

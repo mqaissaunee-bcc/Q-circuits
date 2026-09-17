@@ -193,8 +193,8 @@ export class Store {
     return n;
   }
 
-  addWire(x1, y1, x2, y2) {
-    const w = { id: this.uid++, x1, y1, x2, y2 };
+  addWire(x1, y1, x2, y2, bus = false) {
+    const w = { id: this.uid++, x1, y1, x2, y2, ...(bus ? { bus: true } : {}) };
     this.state.wires.push(w);
     return w;
   }
@@ -243,7 +243,7 @@ export class Store {
         added.push(c.id);
       });
       this.clipboard.wires.forEach((src) => {
-        const w = { id: this.uid++, x1: src.x1 + dx, y1: src.y1 + dy, x2: src.x2 + dx, y2: src.y2 + dy };
+        const w = { id: this.uid++, x1: src.x1 + dx, y1: src.y1 + dy, x2: src.x2 + dx, y2: src.y2 + dy, ...(src.bus ? { bus: true } : {}) };
         s.wires.push(w);
         added.push(w.id);
       });
@@ -285,6 +285,25 @@ export class Store {
         n.x = x; n.y = y;
       });
     }, "rotate");
+    return true;
+  }
+
+  /**
+   * Mirror the selected parts in place: "h" swaps left and right, "v" top and
+   * bottom, as PSpice's Mirror Horizontally and Mirror Vertically do.
+   */
+  mirrorSelection(axis) {
+    const comps = this.selectedComps();
+    if (!comps.length) return false;
+    this.edit(() => {
+      comps.forEach((c) => {
+        // Mirroring about the part's own axes, whatever its rotation: for a
+        // part turned 90° the axes swap.
+        const turned = ((c.rot || 0) / 90) % 2 === 1;
+        const k = (axis === "h") !== turned ? "mx" : "my";
+        c[k] = !c[k];
+      });
+    }, "mirror");
     return true;
   }
 

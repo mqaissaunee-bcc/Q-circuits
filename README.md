@@ -237,7 +237,8 @@ src/
   labs.js           lab definitions, reference diagrams, check builders and
                     the check runner
   diagram.js        the floating, read-only Reference diagram window
-  digital.js        gates, the 7473, STIM1 and DigClock from behavioural sources
+  digital.js        gates, the 7473, 74151A, 74154, STIM1 and DigClock from
+                    behavioural sources
   main.js           wiring: panels redraw from one refresh()
   styles.css        theme tokens, dark mode, responsive workspace
 test/e2e.mjs        end-to-end suite (Playwright)
@@ -335,8 +336,8 @@ and only the ones actually used reach the netlist.
 ## Labs
 
 The lab list is grouped. **Explorations** are the original five guided labs.
-The **ELEC 101** groups are the PSpice lab exercises (Labs 4–12), rebuilt as
-thirty-four checked exercises:
+The **ELEC 101** groups are the PSpice lab exercises (Labs 4–14), rebuilt as
+thirty-nine checked exercises:
 
 | Exercise | Kind | What the student does |
 |---|---|---|
@@ -364,6 +365,11 @@ thirty-four checked exercises:
 | 11D Counter | draw | Four 7473s and two 7408s; the count at two times and its highest value |
 | 12A–12B Transistor amplifiers | draw | One- and two-stage Q2N2222 common-emitter amplifiers, 100 Hz–100 MEG; gain and upper corner |
 | 12C–12E Op-amp amplifiers | draw | LM324 inverting, non-inverting and two-stage inverting, using the handout's macromodel; gain and upper corner |
+| 13A Multiplexer | draw | Two 74151As, a 7404 and a 7402, with sixteen data lines off a bus through bus entries |
+| 13B Demultiplexer | draw | A 74154 and sixteen 7404s back onto a bus; every Yk must reach Dk |
+| 13C MOD 10 counter | draw | Four 7473s, four 7408s and a 7432; runs, and the count is read at three times |
+| 14A Instrumentation amplifier | draw | Three LM324s (U1A mirrored), a bridge with R2 = {RVAL}, a crossing that must not join |
+| 14B Discrete op-amp | draw | JFET pair, six Q2N2222s, three diodes, J2 and Q3 mirrored; every connection of Figure 14-2 |
 
 How they behave:
 
@@ -503,6 +509,26 @@ sources (`src/digital.js`), as TTL looks from outside: 0 V is 0, 5 V is 1.
 - The palette has **Analog** and **Digital** tabs; opening a Lab 10 or 11
   exercise switches to Digital. Keyboard shortcuts reach every part either
   way.
+
+### Buses, ports and mirroring (Lab 13 and 14)
+
+- **Bus (Y)** draws a thick line that is not a net, as in PSpice: signals
+  join it only by name. A net alias on a bus may be a bus name such as
+  `D[0:15]`. A wire ending straight on a bus is flagged.
+- **Bus entry** is the short diagonal from a wire to a bus. Its wire end is
+  a connection; its other end must touch a bus.
+- **Port** is PSpice's PORTLEFT/PORTRIGHT: a named connection drawn as an
+  arrow. Ports, power symbols, net aliases and bus entries all count as a
+  connection, so a signal that leaves the sheet by name is not "dangling".
+- **⇆ and ⇅** mirror the selected parts left–right and top–bottom, before
+  their rotation, as PSpice's Mirror Horizontally and Vertically do. Pins,
+  text and symbols all follow.
+- **74151A** and **74154** are in the Digital tab and simulate: the Lab 13
+  multiplexer and demultiplexer recover a selected data line end to end.
+- Net names may contain `+` and `-`: `vin+` becomes `vin_p` in the netlist
+  and `vin-` becomes `vin_n`, so the two never merge.
+- **N-channel JFET** uses the PSpice J2N3819 card, trimmed of the
+  parameters this ngspice build exits on. D1N914 is in the diode models.
 
 ### PSpice models
 

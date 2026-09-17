@@ -6,7 +6,7 @@
  * drawing code a pure function of the store.
  */
 
-import { GRID, PARTS, PALETTE, pinsOf, boxOf, shapeOf, filledIndices, textAnchor, netlistNameOf, rotatePoint } from "./parts.js";
+import { GRID, PARTS, PALETTE, pinsOf, boxOf, shapeOf, filledIndices, textAnchor, netlistNameOf, rotatePoint, placePoint } from "./parts.js";
 import { buildNodes, nodeAtPoint, formatEng } from "./netlist.js";
 import { canProbeCurrent } from "./simulate.js";
 
@@ -215,6 +215,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       }
     }
     for (const w of store.state.wires) {
+      if (w.bus) continue;
       if (distToSeg(p.x, p.y, w) < tol) {
         const horizontal = w.y1 === w.y2;
         return horizontal ? { x: snap(p.x), y: w.y1 } : { x: w.x1, y: snap(p.y) };
@@ -258,7 +259,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     const g = el("g", null, svg);
     store.state.wires.forEach((w) => {
       const sel = store.selection.has(w.id);
-      el("line", { x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2, class: "wire" + (sel ? " is-selected" : "") }, g);
+      el("line", { x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2, class: "wire" + (w.bus ? " is-bus" : "") + (sel ? " is-selected" : "") }, g);
       if (sel) {
         el("rect", { x: w.x1 - 4, y: w.y1 - 4, width: 8, height: 8, class: "wire-handle" }, g);
         el("rect", { x: w.x2 - 4, y: w.y2 - 4, width: 8, height: 8, class: "wire-handle" }, g);
@@ -293,8 +294,9 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       const def = PARTS[c.type];
       const sel = store.selection.has(c.id);
       const rot = def.upright ? 0 : c.rot || 0;
+      const flip = def.upright ? "" : ` scale(${c.mx ? -1 : 1},${c.my ? -1 : 1})`;
       const grp = el("g", {
-        transform: `translate(${c.x},${c.y}) rotate(${rot})`,
+        transform: `translate(${c.x},${c.y}) rotate(${rot})${flip}`,
         class: "part" + (sel ? " is-selected" : "") + (def.virtual ? " is-virtual" : "")
       }, g);
       const fills = filledIndices(c.type);
@@ -316,13 +318,13 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
 
       if (def.texts) {
         def.texts(c).forEach((t) => {
-          const [dx, dy] = def.upright ? [t.x, t.y] : rotateText(t, c.rot || 0);
+          const [dx, dy] = def.upright ? [t.x, t.y] : rotateText(t, c);
           const node = el("text", {
             x: c.x + dx, y: c.y + dy,
             class: t.cls || "part-value",
             // Unrotated, text keeps its own alignment; turned, it centres on
             // its anchor so it cannot swing across the symbol.
-            "text-anchor": def.upright || !((c.rot || 0) % 360) ? (t.anchor || "start") : "middle",
+            "text-anchor": textAnchorFor(def, c, t),
             "data-edit": "value", "data-id": c.id, "data-field": t.field || ""
           }, g);
           node.textContent = t.text;
@@ -352,10 +354,20 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
    * Text on a rotatable symbol stays upright; only its anchor moves, so a
    * power bar turned to point down carries its name underneath.
    */
-  function rotateText(t, rot) {
+  function rotateText(t, c) {
     // t.y is the text's centre; +4 turns that into a baseline for 12px type.
-    const [x, y] = rotatePoint(t.x, t.y, rot);
+    // The position follows mirroring and rotation; the letters stay upright.
+    const [x, y] = placePoint(t.x, t.y, c);
     return [x, y + 4];
+  }
+
+  /** Alignment for text inside a symbol, flipped when the symbol is. */
+  function textAnchorFor(def, c, t) {
+    const a = t.anchor || "start";
+    if (def.upright) return a;
+    if ((c.rot || 0) % 360) return "middle";
+    if (c.mx && a !== "middle") return a === "start" ? "end" : "start";
+    return a;
   }
 
   function summarise(c) {
@@ -520,9 +532,9 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
         class: "band"
       }, svg);
     }
-    if (tool === "wire" && wireRun && hover) {
+    if (drawsWire() && wireRun && hover) {
       const e = ortho(wireRun, hover);
-      el("line", { x1: wireRun.x, y1: wireRun.y, x2: e.x, y2: e.y, class: "preview" }, svg);
+      el("line", { x1: wireRun.x, y1: wireRun.y, x2: e.x, y2: e.y, class: tool === "bus" ? "preview is-bus" : "preview" }, svg);
     }
     if (caret && tool !== "select" && tool !== "pan" && tool !== "zoomrect") {
       const g = el("g", { class: "caret", "aria-hidden": "true" }, svg);
@@ -557,6 +569,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   }
 
   let ghostRot = 0;
+  const drawsWire = () => tool === "wire" || tool === "bus";
 
   function ortho(a, b) {
     if (Math.abs(b.x - a.x) >= Math.abs(b.y - a.y)) return { x: b.x, y: a.y };
@@ -592,7 +605,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       // mousedown focus lands on the sheet, blurring the editor we are about
       // to open and committing it before a key is pressed.
       evt.preventDefault();
-      if (tool === "wire") { wireRun = null; render(); return; }
+      if (drawsWire()) { wireRun = null; render(); return; }
       if (tool === "select") { handleDoubleClick(evt, p); return; }
     }
 
@@ -656,14 +669,14 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       return;
     }
 
-    if (tool === "wire") {
+    if (drawsWire()) {
       if (!wireRun) {
         wireRun = sp;
         say("Wire started. Click the next corner; Escape ends the run.");
       } else {
         const e = ortho(wireRun, sp);
         if (e.x !== wireRun.x || e.y !== wireRun.y) {
-          store.edit(() => store.addWire(wireRun.x, wireRun.y, e.x, e.y), "wire");
+          store.edit(() => store.addWire(wireRun.x, wireRun.y, e.x, e.y, tool === "bus"), "wire");
           wireRun = e;
         }
       }
@@ -867,7 +880,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   });
 
   svg.addEventListener("contextmenu", (evt) => {
-    if (tool === "wire" && wireRun) { evt.preventDefault(); wireRun = null; render(); }
+    if (drawsWire() && wireRun) { evt.preventDefault(); wireRun = null; render(); }
   });
 
   /**
@@ -911,12 +924,12 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       }
       return placed;
     }
-    if (tool === "wire") {
+    if (drawsWire()) {
       if (!wireRun) { wireRun = { ...sp }; say("Wire started."); }
       else {
         const e = ortho(wireRun, sp);
         if (e.x !== wireRun.x || e.y !== wireRun.y) {
-          store.edit(() => store.addWire(wireRun.x, wireRun.y, e.x, e.y), "wire");
+          store.edit(() => store.addWire(wireRun.x, wireRun.y, e.x, e.y, tool === "bus"), "wire");
           wireRun = e;
           say("Wire segment added.");
         }
@@ -1079,7 +1092,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     isViewLocked: () => viewLocked,
 
     /** True when a tool places things and so owns the arrow keys. */
-    isPlacing: () => !!PARTS[tool] || tool === "wire" || tool === "text",
+    isPlacing: () => !!PARTS[tool] || drawsWire() || tool === "text",
 
     /** Nudge the keyboard placement cursor, creating it at the view centre. */
     moveCaret(dx, dy) {
@@ -1104,6 +1117,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       wireRun = null;
       diffStart = null;
       svg.classList.toggle("mode-select", t === "select");
+      svg.classList.toggle("mode-bus", t === "bus");
       svg.classList.toggle("mode-probe", t === "probe" || t === "vdiff");
       svg.classList.toggle("mode-pan", t === "pan");
       svg.classList.toggle("mode-zoom", t === "zoomrect");
