@@ -135,6 +135,7 @@
         <p class="lab-kind" id="labKind" hidden></p>
         <p class="lab-progress" id="labProgress" hidden></p>
         <p class="muted" id="labSummary"></p>
+        <p class="lab-lesson" id="labLesson"></p>
         <ol class="task-list" id="labTasks"></ol>
         <div class="lab-questions" id="labQuestions" hidden></div>
         <div class="btn-row">
@@ -142,6 +143,15 @@
           <button type="button" id="btnLabReset" class="ghost" hidden>Start over</button>
         </div>
         <div id="checkResults"></div>
+        <div class="lab-import">
+          <div class="btn-row">
+            <button type="button" id="btnLabImport" class="ghost"
+                    title="Open a lab file your instructor gave you (.qlab.json)">Import a lab…</button>
+            <button type="button" id="btnLabRemove" class="ghost" hidden>Remove this imported lab</button>
+          </div>
+          <input type="file" id="labFile" accept=".json,application/json" hidden>
+          <div id="labImportMsg" role="status"></div>
+        </div>
       </div>
     </section>
 

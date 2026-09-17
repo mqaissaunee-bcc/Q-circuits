@@ -31,7 +31,9 @@ function check(name, ok, detail = "") {
   ok ? pass++ : fail++;
 }
 
-const browser = await chromium.launch();
+// PW_CHROME lets the suite run against a Chromium that is already on the
+// machine, instead of the one Playwright downloads.
+const browser = await chromium.launch(process.env.PW_CHROME ? { executablePath: process.env.PW_CHROME } : {});
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));

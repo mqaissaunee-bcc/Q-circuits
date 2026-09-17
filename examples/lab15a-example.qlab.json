@@ -1,0 +1,39 @@
+{
+  "format": "q-circuits-lab",
+  "version": 1,
+  "id": "elec101-15a-example",
+  "code": "15A",
+  "group": "ELEC 101 · Lab 15 — Example",
+  "kind": "draw",
+  "title": "15A · Loaded voltage divider",
+  "summary": "An example lab file. A 12 V source across two resistors, with a load across the lower one, to show how loading changes the output.",
+  "lesson": "https://mqaissaunee-bcc.github.io/elec101/elec101-lab07-lesson.html",
+  "tasks": [
+    "Type LAB 15A in the circuit name box.",
+    "Place VS (DC 12) on the left with + up, R1 = 1k across the top, and R2 = 1k upright on the right.",
+    "Wire the loop and ground the bottom wire. Name the node between VS and R1 IN, and the node between R1 and R2 OUT.",
+    "Place RL = 1k in parallel with R2, from OUT to the bottom wire.",
+    "In the Analysis panel choose Operating point, and probe OUT.",
+    "Run it, then enter the voltage at OUT and the current in R1."
+  ],
+  "useStudentAnalysis": true,
+  "checks": [
+    { "title": "15A" },
+    { "parts": { "VS": { "dc": 12, "type": "V" }, "R1": "1k", "R2": "1k", "RL": "1k" } },
+    { "wiring": [
+      ["VS", ["IN", "0"], true],
+      ["R1", ["IN", "OUT"]],
+      ["R2", ["OUT", "0"]],
+      ["RL", ["OUT", "0"]]
+    ] },
+    { "noOpenEnds": true },
+    { "analysis": { "op": true } },
+    { "probe": { "at": "OUT" } },
+    { "expect": { "value": "v(OUT)", "is": 4, "tol": 0.02,
+                  "label": "The loaded divider gives 4 V, not the 6 V it would give unloaded" } }
+  ],
+  "questions": [
+    { "id": "vout", "prompt": "Voltage at OUT, in volts", "value": "v(OUT)", "abs": 0.02 },
+    { "id": "ir1",  "prompt": "Current in R1, in amps (type 8m for 8 mA)", "value": "i(R1)", "rel": 0.02 }
+  ]
+}

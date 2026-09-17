@@ -16,6 +16,7 @@ const LIBRARY_KEY = "q-circuits-library-v1";
 const PROGRESS_KEY = "q-circuits-progress-v1";
 const LABWORK_KEY = "q-circuits-labwork-v1";
 const CURRENT_LAB_KEY = "q-circuits-current-lab-v1";
+const IMPORTED_LABS_KEY = "q-circuits-imported-labs-v1";
 const LEGACY_DOC_FORMATS = new Set([DOC_FORMAT, "spice-lab-circuit"]);
 const HISTORY_LIMIT = 60;
 
@@ -504,6 +505,34 @@ export class Store {
     const all = this.readLabWork();
     delete all[labId];
     try { localStorage.setItem(LABWORK_KEY, JSON.stringify(all)); } catch { /* storage blocked */ }
+  }
+
+  /* --------------------------------------------------------- imported labs */
+
+  /**
+   * Lab files the student has imported, stored as the JSON they arrived in
+   * and recompiled on load, so a fix to the compiler reaches labs that were
+   * imported before it.
+   */
+  readImportedLabs() {
+    try {
+      const raw = localStorage.getItem(IMPORTED_LABS_KEY);
+      const all = raw ? JSON.parse(raw) : {};
+      return all && typeof all === "object" ? all : {};
+    } catch { return {}; }
+  }
+
+  saveImportedLab(doc) {
+    const all = this.readImportedLabs();
+    all[doc.id] = { addedAt: new Date().toISOString(), doc };
+    try { localStorage.setItem(IMPORTED_LABS_KEY, JSON.stringify(all)); return true; } catch { return false; }
+  }
+
+  removeImportedLab(id) {
+    const all = this.readImportedLabs();
+    delete all[id];
+    try { localStorage.setItem(IMPORTED_LABS_KEY, JSON.stringify(all)); } catch { /* storage blocked */ }
+    this.forgetLabWork(id);
   }
 
   get currentLabId() {

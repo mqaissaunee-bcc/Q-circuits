@@ -19,6 +19,8 @@ npm run build      # writes dist/
 npm run preview    # serves dist/ at http://localhost:4173
 node test/e2e.mjs        # the editor, engine and exploration labs, against dist/
 node test/labs101.mjs    # every ELEC 101 exercise: fails as supplied, passes when solved
+node test/labfile.mjs    # imported lab files: compile, mark, and refuse bad files
+# PW_CHROME=/path/to/chrome runs the suites against a Chromium already installed
 ```
 
 `dist/` is a static site. It deploys to GitHub Pages, Netlify, or any web root
@@ -239,10 +241,13 @@ src/
   diagram.js        the floating, read-only Reference diagram window
   digital.js        gates, the 7473, 74151A, 74154, STIM1 and DigClock from
                     behavioural sources
+  labfile.js        compiles an imported .qlab.json into checks
   main.js           wiring: panels redraw from one refresh()
   styles.css        theme tokens, dark mode, responsive workspace
 test/e2e.mjs        end-to-end suite (Playwright)
 test/labs101.mjs    ELEC 101 lab suite: builds a correct solution to each exercise
+test/labfile.mjs    imported lab files, marked against the built-in reference drawings
+examples/           a worked .qlab.json lab file
 ```
 
 ### Notes on the error translations
@@ -509,6 +514,96 @@ sources (`src/digital.js`), as TTL looks from outside: 0 V is 0, 5 V is 1.
 - The palette has **Analog** and **Digital** tabs; opening a Lab 10 or 11
   exercise switches to Digital. Keyboard shortcuts reach every part either
   way.
+
+## Imported labs
+
+A lab that ships with the app is JavaScript, in `src/labs.js`. A lab that
+travels between people is JSON, and nothing in it is ever executed:
+`src/labfile.js` compiles the file into the same check objects the built-in
+labs use, so an imported lab is marked by exactly the code that marks a
+built-in one. Unknown rules, unknown part types and expressions that are not
+readings are reported when the file is opened, and a file with any error in it
+does not open at all.
+
+- **Import a lab…** in the lab panel takes a `.qlab.json` file. The lab joins
+  the lab list under its own group, with its own saved sheet and pass mark.
+  **Remove this imported lab** deletes it and the work on it.
+- Imported labs are kept in `localStorage` as the JSON they arrived in and
+  recompiled on load, so a fix here reaches labs imported before it.
+- A whole lab also travels in a link, the way a circuit does: `labUrl(doc)`
+  makes one and a `#L=`/`#l=` fragment opens it. The example lab is 636
+  characters as a link.
+- `examples/lab15a-example.qlab.json` is a complete, working example.
+
+### What a lab file contains
+
+```json
+{
+  "format": "q-circuits-lab", "version": 1,
+  "id": "elec101-15a", "code": "15A", "group": "ELEC 101 · Lab 15",
+  "kind": "draw",                     // draw | simulate | fix | explore
+  "title": "15A · Loaded voltage divider",
+  "summary": "One paragraph under the title.",
+  "lesson": "https://…/elec101-lab15-lesson.html",
+  "tasks": ["Type LAB 15A in the circuit name box.", "…"],
+  "circuit": { "comps": [], "wires": [], "probes": [] },
+  "useStudentAnalysis": true,
+  "reference": { "type": "ac", "acPts": "50" },
+  "checks": [ … ], "questions": [ … ]
+}
+```
+
+`circuit` (and the optional `diagram`) use the same shape as a saved circuit,
+so a lab author draws the circuit in Q Circuits, saves it, and pastes it in.
+
+### Check rules
+
+One rule per object. Every rule is a thin wrapper over the `K` builders the
+built-in labs use.
+
+| Rule | Checks |
+|---|---|
+| `title` | The sheet is named, as "15A" or any text |
+| `parts` | Names, values, models, part types, and fields like `device` |
+| `wiring` | `["R1", ["A", "B"]]`, with a third `true` for pins in order |
+| `gate`, `pins` | A gate's inputs and output; named pins of a many-pinned part |
+| `noOpenEnds` | Nothing is left hanging |
+| `aliasOn`, `bus` | A net alias sits where it should; signals reach a bus |
+| `analysis` | `{ op }`, `{ dc: {src,start,stop,step} }`, `{ ac: {…} }`, `{ tran: {…} }` |
+| `param`, `paramPart` | A parametric sweep and the Parameter part behind it |
+| `probe`, `probeOrder`, `diffProbe`, `currentProbe` | Probes, and the order they were placed |
+| `dbMode`, `axis` | The plot is in dB; its axis ranges |
+| `ffInit` | Initialize flip-flops to 0, 1 or X |
+| `stim`, `mirrored` | STIM1 commands; parts mirrored (or not) |
+| `expect` | A reading from the simulation: `{ value, is, tol }` |
+
+### Readings
+
+The same small language grades answers (`questions[].value`) and `expect`.
+Nothing in it can reach outside the simulation result.
+
+```
+v(OUT)              v(A,B)            i(R1)          nodes()
+v(B) @ 12           v(OUT) @ 4.5m     gain(OUT) @ 1k
+max(v(IN,OUT))      min(…)            avg(v(OUT) @ 1m..3m)
+peak(OUT)           corner(OUT, upper|lower)
+logic(Q) @ 4.5m     count(Q0,Q1,Q2,Q3) @ 11.5m
+logicWhile(Q, A=0, B=1)               step(2, v(B) @ 12)
+```
+
+Nodes are named (`OUT`), ground is `0`, and a pin is `R1:1`. Answers are
+marked against the simulation, never against a number in the file, and a wrong
+answer never reveals the right one.
+
+### Writing one
+
+1. Draw the finished circuit in Q Circuits and run it.
+2. Save it, and paste it in as `circuit` (for `simulate` and `fix` labs) or
+   `diagram` (for `draw` labs).
+3. Import the file and press Check my work against your own finished sheet:
+   everything should pass.
+4. Break one thing on purpose and confirm the right check catches it. A check
+   that can never fail looks exactly like one that works.
 
 ### Buses, ports and mirroring (Lab 13 and 14)
 

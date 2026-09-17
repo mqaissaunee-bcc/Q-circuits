@@ -47,7 +47,9 @@ function check(name, ok, detail = "") {
 }
 function near(a, b, tol) { return isFinite(a) && Math.abs(a - b) <= tol; }
 
-const browser = await chromium.launch();
+// PW_CHROME lets the suite run against a Chromium that is already on the
+// machine, instead of the one Playwright downloads.
+const browser = await chromium.launch(process.env.PW_CHROME ? { executablePath: process.env.PW_CHROME } : {});
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 2 });
 
 const consoleErrors = [];
