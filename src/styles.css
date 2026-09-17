@@ -562,3 +562,46 @@ dl.shortcuts kbd {
 
 /* The palette is the widest group; slimmer buttons keep the toolbar to two rows. */
 #partTools button { padding-inline: .6rem; }
+
+/* ------------------------------------------------ reference diagram window */
+.diagram-win {
+  position: fixed; z-index: 30;
+  right: 24px; bottom: 24px;
+  width: 460px; height: 460px;
+  min-width: 260px; min-height: 200px;
+  max-width: calc(100vw - 16px); max-height: calc(100vh - 16px);
+  display: flex; flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--rule); border-radius: var(--radius);
+  box-shadow: 0 2px 6px rgba(23,26,30,.12), 0 16px 40px rgba(23,26,30,.18);
+  resize: both; overflow: hidden;
+}
+.diagram-win[hidden] { display: none; }
+.diagram-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-1) var(--sp-1) var(--sp-3);
+  background: var(--panel-2); border-bottom: 1px solid var(--rule);
+  cursor: move; user-select: none; touch-action: none;
+}
+.diagram-head:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.diagram-head h2 { flex: 1; min-width: 0; font-size: .9rem; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diagram-head .head-actions { display: flex; flex-wrap: nowrap; flex-shrink: 0; gap: 2px; }
+.diagram-head button { min-height: 36px; padding-block: 0; }
+.diagram-caption { margin: 0; padding: var(--sp-1) var(--sp-3); font-size: .78rem; color: var(--ink-soft); }
+.diagram-host { flex: 1; min-height: 0; position: relative; }
+.diagram-host svg.sheet { width: 100%; height: 100%; aspect-ratio: auto; background: var(--panel); cursor: grab; }
+.diagram-host svg.sheet:active { cursor: grabbing; }
+.diagram-words { border-top: 1px solid var(--rule); font-size: .78rem; max-height: 40%; overflow: auto; }
+.diagram-words summary { padding: var(--sp-1) var(--sp-3); cursor: pointer; }
+.diagram-words ul { margin: 0; padding: 0 var(--sp-3) var(--sp-2) var(--sp-5); font-family: var(--mono); }
+#btnDiagram[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+/* On a phone there is no room beside the sheet: dock it along the bottom. */
+@media (max-width: 760px) {
+  .diagram-win {
+    top: auto !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+    width: auto !important; height: 42vh !important; max-width: none;
+    resize: none; border-radius: 0;
+  }
+  .diagram-head { cursor: default; }
+}

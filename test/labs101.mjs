@@ -410,12 +410,160 @@ await lab("e101-07d", `(() => {
   T.vprobe(520, 100);
 })()`);
 
+
+/* ------------------------------------------------- reference diagrams */
+
+console.log("\n— every reference diagram passes its own lab —");
+const dcSweep = { type: "dc", dcSrc: "VS", dcStart: "-12", dcStop: "12", dcStep: "0.1" };
+const rvalSweep = { ...dcSweep, paramOn: true, paramName: "RVAL", paramMode: "lin", paramStart: "100", paramStop: "300", paramStep: "100" };
+const DIAGRAM_RUNS = {
+  "e101-04a": { title: "LAB 04A", answers: { ve: "5.64" } },
+  "e101-04b": { title: "LAB 04B", answers: { vr2: "4.8" } },
+  "e101-05a": { title: "LAB 05A", analysis: { type: "ac", acStart: "10", acStop: "100k", acPts: "101" },
+                answers: { gain: "19.08", flo: String(ref5a.lo), fhi: String(ref5a.hi) } },
+  "e101-05b": { title: "LAB 05B", analysis: { type: "tran", trStop: "5m", trStep: "0.01m" },
+                answers: { ipk: String(ref5b.max), imin: String(ref5b.min) } },
+  "e101-05c": { title: "LAB 05C", analysis: { type: "op" }, showBias: true, answers: { vout: "4.5", vmid: "6" } },
+  "e101-06a": { title: "LAB 06A", answers: { nodes: "2" } },
+  "e101-06b": { title: "LAB 06B", answers: { vout: "5.143" } },
+  "e101-06c": { title: "LAB 06C" },
+  "e101-07a": { title: "LAB 07A", analysis: dcSweep, answers: { vhi: "9", vlo: "-9" } },
+  "e101-07b": { title: "LAB 07B", analysis: dcSweep, answers: { vab: "3" } },
+  "e101-07c": { title: "LAB 07C", analysis: rvalSweep, answers: { v100: "9", v200: "7.2", v300: "6" } },
+  "e101-07d": { title: "LAB 07D", analysis: rvalSweep, answers: { v100: "3.6" } }
+};
+for (const [id, run] of Object.entries(DIAGRAM_RUNS)) {
+  const out = await page.evaluate(async ({ id, run }) => {
+    const L = window.__spiceLab;
+    window.T.open(id);
+    const d = L.labs.diagramFor(L.labs.labById(id));
+    L.store.loadCircuit({ ...d, title: run.title });
+    L.store.edit((s) => {
+      Object.assign(s.analysis, run.analysis || {});
+      s.answers = run.answers || {};
+      s.showBias = !!run.showBias;
+    }, "t");
+    const r = await window.T.check(id);
+    return r;
+  }, { id, run });
+  check(`${id}: its reference diagram passes every check`, out.ok,
+    out.error ? `engine: ${out.error.split("\n")[0]}` : out.failed.join(" | "));
+}
+
+const explorations = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  return L.labs.LABS.filter((l) => l.kind === "explore").every((l) => L.labs.diagramFor(l) === l.circuit);
+});
+check("exploration labs show their starting circuit", explorations);
+
+console.log("\n— the diagram window —");
+const win = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  L.freshLabs();
+  const inFree = { button: !document.getElementById("btnDiagram").hidden, win: !document.getElementById("diagramWin").hidden };
+  localStorage.removeItem("q-circuits-diagram-v1");
+  window.T.open("e101-06c");
+  const w = document.getElementById("diagramWin");
+  return {
+    inFree,
+    open: !w.hidden,
+    title: document.getElementById("diagramTitle").textContent,
+    parts: L.diagram.store.state.comps.length,
+    words: [...document.querySelectorAll("#diagramWords li")].map((li) => li.textContent),
+    sheetParts: L.store.state.comps.length,
+    saved: JSON.parse(localStorage.getItem("q-circuits-v1")).state.comps.length,
+    grid: w.querySelectorAll(".grid-layer").length,
+    role: w.querySelector("svg").getAttribute("role")
+  };
+});
+check("no diagram button or window in free build", !win.inFree.button && !win.inFree.win, JSON.stringify(win.inFree));
+check("opening a lab opens its diagram", win.open && /6C/.test(win.title), win.title);
+check("the diagram draws the lab's circuit, not the student's sheet", win.parts === 15 && win.sheetParts === 0, `${win.parts} vs ${win.sheetParts}`);
+check("the diagram never autosaves over the student's sheet", win.saved === 0, `autosave holds ${win.saved} parts`);
+check("the diagram has no grid", win.grid === 0);
+const fill = await page.evaluate(() => {
+  const svg = document.querySelector("#diagramHost svg");
+  const g = svg.getBoundingClientRect();
+  const drawn = [...svg.querySelectorAll(".part")].map((p) => p.getBoundingClientRect());
+  const w = Math.max(...drawn.map((b) => b.right)) - Math.min(...drawn.map((b) => b.left));
+  const h = Math.max(...drawn.map((b) => b.bottom)) - Math.min(...drawn.map((b) => b.top));
+  return Math.max(w / g.width, h / g.height);
+});
+check("Fit makes the circuit fill the diagram window", fill > 0.8, `${Math.round(fill * 100)}% of the window`);
+check("the diagram is announced as an image", win.role === "img");
+check("the circuit in words names nets and polarity",
+  win.words.includes("VS1 (DC 12): + VCC, - ground") &&
+    win.words.some((w) => /^Q2 \(Q2N2222\): base ground/.test(w)) &&
+    win.words.some((w) => /^REE \(4\.8k\): between (VEE and node \d+|node \d+ and VEE)$/.test(w)),
+  win.words.slice(0, 4).join(" / "));
+
+// Dragging inside the diagram pans; it never edits.
+const hb = await page.locator("#diagramHost svg").boundingBox();
+const before = await page.evaluate(() => JSON.stringify(window.__spiceLab.diagram.store.state.comps));
+await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+await page.mouse.down();
+await page.mouse.move(hb.x + hb.width / 2 - 60, hb.y + hb.height / 2 - 30, { steps: 5 });
+await page.mouse.up();
+const after = await page.evaluate(() => ({
+  comps: JSON.stringify(window.__spiceLab.diagram.store.state.comps),
+  vb: document.querySelector("#diagramHost svg").getAttribute("viewBox")
+}));
+check("dragging in the diagram leaves the circuit unchanged", before === after.comps);
+
+// Moving the window by its title bar, and remembering it.
+const hd = await page.locator("#diagramHead").boundingBox();
+await page.mouse.move(hd.x + 40, hd.y + hd.height / 2);
+await page.mouse.down();
+await page.mouse.move(hd.x - 200, hd.y + 100, { steps: 6 });
+await page.mouse.up();
+const movedWin = await page.evaluate(() => ({
+  box: document.getElementById("diagramWin").getBoundingClientRect().toJSON(),
+  prefs: JSON.parse(localStorage.getItem("q-circuits-diagram-v1"))
+}));
+check("the title bar drags the window", Math.abs(movedWin.box.x - (hd.x - 240)) < 3, `x = ${movedWin.box.x}`);
+check("the position is remembered", movedWin.prefs?.rect && Math.abs(movedWin.prefs.rect.x - movedWin.box.x) < 2, JSON.stringify(movedWin.prefs));
+
+await page.focus("#diagramHead");
+await page.keyboard.press("ArrowRight");
+const keyed = await page.evaluate(() => document.getElementById("diagramWin").getBoundingClientRect().x);
+check("arrow keys move the window when its title bar has focus", Math.abs(keyed - movedWin.box.x - 20) < 2, `${movedWin.box.x} → ${keyed}`);
+const toolAfterKey = await page.evaluate(() => window.__spiceLab.canvas.getTool());
+check("keys in the window do not reach the sheet's shortcuts", toolAfterKey === "select" || toolAfterKey !== "R", toolAfterKey);
+
+await page.keyboard.press("Escape");
+const closed = await page.evaluate(() => {
+  const r = { hidden: document.getElementById("diagramWin").hidden, pressed: document.getElementById("btnDiagram").getAttribute("aria-pressed") };
+  window.T.open("e101-07c");
+  r.staysClosed = document.getElementById("diagramWin").hidden;
+  document.getElementById("btnDiagram").click();
+  r.reopened = !document.getElementById("diagramWin").hidden;
+  r.hasParam = [...document.querySelectorAll("#diagramWin .param-head")].length === 1;
+  return r;
+});
+check("Escape closes the window", closed.hidden && closed.pressed === "false", JSON.stringify(closed));
+check("a closed window stays closed on the next lab", closed.staysClosed);
+check("the button reopens it with the new lab's circuit", closed.reopened && closed.hasParam);
+
+if (process.env.SHOTS) {
+  await page.evaluate(() => {
+    localStorage.removeItem("q-circuits-diagram-v1");
+    document.getElementById("diagramWin").removeAttribute("style");
+    window.T.open("e101-06c");
+  });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: "/tmp/diagram-win.png" });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.waitForTimeout(200);
+  await page.locator("#diagramWin").screenshot({ path: "/tmp/diagram-dark.png" });
+  await page.emulateMedia({ colorScheme: "light" });
+}
+
 /* ------------------------------------------------------------- the UI */
 
 console.log("\n— sheet tools —");
 await page.evaluate(() => window.T.open("e101-06a"));
 await page.click('#partTools button[data-tool="NET"]');
-const box = await page.locator("svg.sheet").boundingBox();
+const box = await page.locator("#sheetHost svg.sheet").boundingBox();
 await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.4);
 await page.waitForTimeout(200);
 const editorUp = await page.evaluate(() => !!document.querySelector(".inline-edit"));
@@ -433,7 +581,7 @@ await page.evaluate(() => { window.T.open("e101-07b"); window.T.series(); });
 await page.click('#modeTools button[data-tool="vdiff"]');
 await page.evaluate(() => window.__spiceLab.canvas.fit());
 const pt = await page.evaluate(() => {
-  const svg = document.querySelector("svg.sheet");
+  const svg = document.querySelector("#sheetHost svg.sheet");
   const vb = svg.getAttribute("viewBox").split(" ").map(Number);
   const r = svg.getBoundingClientRect();
   const to = (x, y) => ({ x: r.left + ((x - vb[0]) / vb[2]) * r.width, y: r.top + ((y - vb[1]) / vb[3]) * r.height });
@@ -473,6 +621,29 @@ const faded = await page.evaluate(() => [...document.querySelectorAll("button.gh
 check("secondary buttons are not drawn faded as if disabled", !faded.length, faded.join(", "));
 
 check("no page errors", errors.length === 0, errors.join(" / "));
+
+const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+await phone.goto(`http://localhost:${PORT}/`);
+await phone.waitForFunction(() => window.__spiceLab?.ready === true);
+const phoneState = await phone.evaluate(() => {
+  localStorage.removeItem("q-circuits-diagram-v1");
+  return 0;
+});
+await phone.reload();
+await phone.waitForFunction(() => window.__spiceLab?.ready === true);
+const phoneWin = await phone.evaluate(() => {
+  window.__spiceLab.freshLabs();
+  const s = document.getElementById("labSelect");
+  s.value = "e101-06a"; s.dispatchEvent(new Event("change"));
+  const closedFirst = document.getElementById("diagramWin").hidden;
+  document.getElementById("btnDiagram").click();
+  const r = document.getElementById("diagramWin").getBoundingClientRect();
+  return { closedFirst, docked: Math.abs(r.bottom - innerHeight) < 2 && r.width === innerWidth, overflow: document.documentElement.scrollWidth - innerWidth };
+});
+void phoneState;
+check("on a phone the diagram starts closed", phoneWin.closedFirst);
+check("on a phone it docks full width along the bottom", phoneWin.docked, JSON.stringify(phoneWin));
+check("no sideways scrolling on a phone with it open", phoneWin.overflow === 0, `${phoneWin.overflow}px`);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 await browser.close();

@@ -30,7 +30,13 @@ export const DEFAULT_ANALYSIS = {
 };
 
 export class Store {
-  constructor() {
+  /**
+   * `persist: false` makes a store that never touches localStorage. The
+   * reference diagram uses one; without it, loading the diagram would
+   * autosave over the student's sheet.
+   */
+  constructor({ persist = true } = {}) {
+    this.persist = persist;
     this.state = {
       title: "Untitled circuit",
       comps: [],
@@ -489,6 +495,7 @@ export class Store {
   /* --------------------------------------------------------- persistence */
 
   save() {
+    if (!this.persist) return;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ state: this.state, uid: this.uid }));
     } catch { /* private browsing; autosave is a convenience, not a contract */ }

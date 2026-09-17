@@ -1380,6 +1380,168 @@ const ELEC101 = [
 ];
 
 
+
+/* ---------------------------------------------------- reference diagrams */
+
+/*
+ * What each lab's floating Reference diagram draws. For a fix lab it is the
+ * corrected circuit, for a simulate lab the supplied circuit with the
+ * handout's markers, for a draw lab the circuit to draw. test/labs101.mjs
+ * loads every one of these and requires it to pass its lab, so a diagram can
+ * never show something the checker would reject.
+ */
+
+const vp = (x, y) => ({ kind: "v", ref: `${x},${y}`, x, y });
+const ip = (ref) => ({ kind: "i", ref });
+const dp = (x, y, x2, y2) => ({ kind: "vd", ref: `${x},${y}|${x2},${y2}`, x, y, x2, y2 });
+const plus = (base, { comps = [], wires = [], probes = [], drop = [] } = {}) => ({
+  comps: [...base.comps.filter((c) => !drop.includes(c.label)), ...comps],
+  wires: [...base.wires, ...wires],
+  probes
+});
+
+const D04A = {
+  comps: [
+    P("V", 160, 200, 90, { label: "V1", value: "DC 12", ac: "" }),
+    P("R", 260, 140, 0, { label: "R1", value: "1k" }),
+    P("NPN", 420, 140, 0, { label: "Q1", model: "Q2N3904" }),
+    P("R", 460, 220, 90, { label: "R2", value: "1k" }),
+    G(300, 360)
+  ],
+  wires: [
+    W(160, 200, 160, 140), W(160, 140, 260, 140), W(320, 140, 420, 140),
+    W(460, 100, 460, 40), W(460, 40, 380, 40), W(380, 40, 380, 140),
+    W(460, 180, 460, 220),
+    W(460, 280, 460, 340), W(460, 340, 160, 340), W(160, 260, 160, 340),
+    W(300, 340, 300, 360)
+  ],
+  probes: []
+};
+
+const D04B = {
+  comps: [
+    P("V", 120, 160, 90, { label: "V1", value: "DC 12", ac: "" }),
+    P("R", 180, 80, 0, { label: "R1", value: "1k" }),
+    P("R", 400, 160, 90, { label: "R2", value: "1k" }),
+    P("R", 460, 80, 0, { label: "R3", value: "1k" }),
+    P("R", 680, 160, 90, { label: "R4", value: "1k" }),
+    G(400, 300)
+  ],
+  wires: [
+    W(120, 160, 120, 80), W(120, 80, 180, 80), W(240, 80, 400, 80), W(400, 80, 400, 160),
+    W(400, 80, 460, 80), W(520, 80, 680, 80), W(680, 80, 680, 160),
+    W(400, 220, 400, 280), W(680, 220, 680, 280), W(120, 280, 680, 280),
+    W(120, 220, 120, 280), W(400, 280, 400, 300)
+  ],
+  probes: []
+};
+
+const D05A = plus(LAB05A, { probes: [vp(820, 140)] });
+const D05B = plus(LAB05B, { probes: [ip("R1"), vp(160, 120)] });
+const D05C = plus(LAB05C, { comps: [NET(160, 140, "IN"), NET(520, 140, "OUT")] });
+
+/** The series circuit of 6A and all of Lab 7. */
+const D_SERIES = {
+  comps: [
+    P("V", 160, 160, 90, { label: "VS", value: "DC 12", ac: "" }),
+    P("R", 220, 100, 0, { label: "R1", value: "100" }),
+    P("R", 340, 160, 90, { label: "R2", value: "300" }),
+    G(250, 300),
+    NET(160, 100, "A"), NET(340, 100, "B")
+  ],
+  wires: [
+    W(160, 160, 160, 100), W(160, 100, 220, 100), W(280, 100, 340, 100), W(340, 100, 340, 160),
+    W(340, 220, 340, 280), W(340, 280, 160, 280), W(160, 220, 160, 280), W(250, 280, 250, 300)
+  ],
+  probes: []
+};
+
+const D06B = {
+  comps: [
+    P("V", 160, 200, 90, { label: "VS", value: "DC 12", ac: "" }),
+    P("R", 220, 120, 0, { label: "R1", value: "100" }),
+    P("R", 440, 120, 0, { label: "R2", value: "600" }),
+    P("R", 560, 200, 90, { label: "R3", value: "600" }),
+    P("R", 360, 200, 90, { label: "R4", value: "1.2k" }),
+    G(360, 340),
+    NET(160, 120, "IN"), NET(560, 120, "OUT")
+  ],
+  wires: [
+    W(160, 200, 160, 120), W(160, 120, 220, 120), W(280, 120, 440, 120), W(500, 120, 560, 120),
+    W(560, 120, 560, 200), W(560, 260, 560, 320), W(560, 320, 160, 320), W(160, 260, 160, 320),
+    W(360, 120, 360, 200), W(360, 260, 360, 320), W(360, 320, 360, 340)
+  ],
+  probes: []
+};
+
+const D06C = {
+  comps: [
+    P("V", 100, 260, 90, { label: "VS", value: "DC 0", ac: "1" }),
+    P("C", 160, 200, 0, { label: "C1", value: "10u", ic: "" }),
+    P("NPN", 300, 200, 0, { label: "Q1", model: "Q2N2222" }),
+    P("NPN", 480, 280, 0, { label: "Q2", model: "Q2N2222" }),
+    P("R", 340, 80, 90, { label: "RC1", value: "5k" }),
+    P("R", 520, 80, 90, { label: "RC2", value: "5k" }),
+    P("R", 430, 380, 90, { label: "REE", value: "4.8k" }),
+    P("V", 40, 120, 90, { label: "VS1", value: "DC 12", ac: "" }),
+    P("V", 40, 180, 90, { label: "VS2", value: "DC 12", ac: "" }),
+    G(100, 420), G(70, 180, 270),
+    PWR(430, 80, "VCC"), PWR(40, 120, "VCC"),
+    PWR(430, 440, "VEE", 180), PWR(40, 240, "VEE", 180)
+  ],
+  wires: [
+    W(100, 260, 100, 200), W(100, 200, 160, 200), W(220, 200, 300, 200),
+    W(340, 240, 340, 360), W(340, 360, 520, 360), W(520, 320, 520, 360),
+    W(480, 280, 260, 280), W(260, 280, 260, 400), W(260, 400, 100, 400),
+    W(100, 320, 100, 400), W(100, 400, 100, 420),
+    W(340, 140, 340, 160), W(520, 140, 520, 240), W(340, 80, 520, 80),
+    W(430, 360, 430, 380), W(40, 180, 70, 180)
+  ],
+  probes: []
+};
+
+const D07A = plus(D_SERIES, { probes: [vp(340, 100)] });
+const D07B = plus(D_SERIES, { probes: [dp(160, 100, 340, 100)] });
+const D07C = plus(D_SERIES, {
+  drop: ["R1"],
+  comps: [
+    P("R", 220, 100, 0, { label: "R1", value: "{RVAL}" }),
+    P("PARAM", 420, 40, 0, { label: "PARAM1", name: "RVAL", value: "100" })
+  ],
+  probes: [vp(340, 100)]
+});
+const D07D = plus(D07C, {
+  drop: ["NET_B"],
+  comps: [
+    P("R", 400, 100, 0, { label: "R3", value: "150" }),
+    P("R", 520, 160, 90, { label: "R4", value: "150" }),
+    NET(520, 100, "B")
+  ],
+  wires: [W(340, 100, 400, 100), W(460, 100, 520, 100), W(520, 100, 520, 160),
+          W(520, 220, 520, 280), W(520, 280, 340, 280)],
+  probes: [vp(520, 100)]
+});
+
+const DIAGRAMS = {
+  "e101-04a": D04A, "e101-04b": D04B,
+  "e101-05a": D05A, "e101-05b": D05B, "e101-05c": D05C,
+  "e101-06a": D_SERIES, "e101-06b": D06B, "e101-06c": D06C,
+  "e101-07a": D07A, "e101-07b": D07B, "e101-07c": D07C, "e101-07d": D07D
+};
+
+export const DIAGRAM_CAPTIONS = {
+  explore: "The starting circuit.",
+  fix: "The corrected circuit: what the sheet should look like when you are done.",
+  simulate: "The supplied circuit, with the markers the handout places.",
+  draw: "Draw this circuit. Your layout can differ; the connections and values cannot."
+};
+
+/** The circuit a lab's Reference diagram draws. */
+export function diagramFor(lab) {
+  if (!lab) return null;
+  return DIAGRAMS[lab.id] || lab.diagram || lab.circuit;
+}
+
 /* ------------------------------------------------------------ catalogue */
 
 export const LAB_GROUPS = [

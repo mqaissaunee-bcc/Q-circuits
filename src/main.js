@@ -12,11 +12,12 @@ import { Store, DEFAULT_ANALYSIS } from "./store.js";
 import { createCanvas } from "./canvas.js";
 import { createScope } from "./scope.js";
 import { runNetlist, engineReady } from "./engine.js";
-import { LABS, LAB_GROUPS, LAB_KINDS, labById, runChecks, corners } from "./labs.js";
+import { LABS, LAB_GROUPS, LAB_KINDS, labById, runChecks, corners, diagramFor } from "./labs.js";
 import { simulate, probedTraces, previewNetlist } from "./simulate.js";
 import { explainEngineError } from "./errors.js";
 import { shareUrl, decodeCircuit, clearHash } from "./share.js";
 import { exportSvg, exportCanvas } from "./export-png.js";
+import { createDiagramWindow } from "./diagram.js";
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -39,6 +40,16 @@ const canvas = createCanvas({
     say(`${comp.label} has no free-text value. Use the Selected part panel.`);
   }
 });
+
+const diagram = createDiagramWindow({
+  onStatus: (m) => say(m),
+  onToggle: (open) => {
+    const b = $("btnDiagram");
+    b.setAttribute("aria-pressed", open ? "true" : "false");
+    b.textContent = open ? "Hide diagram" : "Reference diagram";
+  }
+});
+$("btnDiagram").addEventListener("click", () => diagram.toggle());
 
 const scope = createScope({ host: $("scopeHost"), measureHost: $("measureHost"), onStatus: say });
 
@@ -702,6 +713,8 @@ function openLab(lab) {
 function setLab(lab) {
   currentLab = lab;
   store.currentLabId = lab ? lab.id : "";
+  $("btnDiagram").hidden = !lab;
+  diagram.setLab(lab);
   $("checkResults").replaceChildren();
   if (!lab) { clearLabPanel(); return; }
   renderLabPanel(lab);
@@ -1143,4 +1156,4 @@ window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, 
     try { localStorage.removeItem("q-circuits-labwork-v1"); } catch { /* storage blocked */ }
   },
   currentLab: () => currentLab,
-  simulate, labs: { LABS, runChecks, labById, corners } };
+  simulate, diagram, labs: { LABS, runChecks, labById, corners, diagramFor } };

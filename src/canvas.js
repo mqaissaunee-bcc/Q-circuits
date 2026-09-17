@@ -30,13 +30,19 @@ function distToSeg(px, py, w) {
   return Math.hypot(px - (w.x1 + t * dx), py - (w.y1 + t * dy));
 }
 
-export function createCanvas({ host, store, onStatus, onSelectionChange, onNeedsInspector }) {
+/**
+ * `readOnly` draws a circuit that can be panned and zoomed but not edited:
+ * the reference diagram. It also drops the grid and node numbers, which are
+ * working aids rather than part of the drawing.
+ */
+export function createCanvas({ host, store, onStatus, onSelectionChange, onNeedsInspector,
+  readOnly = false, label = "Schematic sheet. Use the parts table below for a text equivalent." }) {
   const svg = el("svg", {
-    class: "sheet",
+    class: readOnly ? "sheet is-readonly" : "sheet",
     viewBox: `0 0 ${SHEET_W} ${SHEET_H}`,
     tabindex: "0",
-    role: "application",
-    "aria-label": "Schematic sheet. Use the parts table below for a text equivalent."
+    role: readOnly ? "img" : "application",
+    "aria-label": label
   });
   host.appendChild(svg);
 
@@ -76,8 +82,8 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     const f = focus || { x: view.x + view.w / 2, y: view.y + view.h / 2 };
     view.x = f.x - (f.x - view.x) * scale;
     view.y = f.y - (f.y - view.y) * scale;
+    view.h = nw * (view.h / view.w);    // keep whatever shape the view has
     view.w = nw;
-    view.h = nw * (SHEET_H / SHEET_W);
     applyView();
     render();
   }
@@ -138,6 +144,14 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     // bounds of its own, is included rather than cropped.
     render();
     const b = contentBox();
+    if (readOnly) {
+      // The diagram window is whatever shape the student made it, so frame
+      // the circuit itself and let the SVG letterbox it.
+      view = { x: b.x, y: b.y, w: b.w, h: b.h };
+      applyView();
+      render();
+      return;
+    }
     const ratio = SHEET_H / SHEET_W;
     const w = Math.max(b.w, b.h / ratio, 300);
     view = {
@@ -215,11 +229,11 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     net = buildNodes(store.state.comps, store.state.wires);
 
-    drawGrid();
+    if (!readOnly) drawGrid();
     drawWires();
     drawJunctions();
     drawComps();
-    drawNodeTags();
+    if (!readOnly) drawNodeTags();
     drawNotes();
     drawBias();
     drawProbes();
@@ -289,6 +303,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
           ? (net.degree.get(`${p.x},${p.y}`) || 0) < 2
           : node !== 0 && (net.pinCount.get(node) || 0) < 2;
         if (def.virtual && !alone) return;
+        if (readOnly && !alone) return;
         el("circle", { cx: p.x, cy: p.y, r: alone ? 4.5 : 2.6, class: alone ? "pin is-open" : "pin" }, g);
       });
 
@@ -543,7 +558,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
 
   svg.addEventListener("pointerdown", (evt) => {
     if (evt.button === 1 && viewLocked) return;
-    if (evt.button === 1 || (evt.button === 0 && tool === "pan")) {
+    if (evt.button === 1 || (evt.button === 0 && (tool === "pan" || readOnly))) {
       gesture = { mode: "pan", start: toSheet(evt), view: { ...view } };
       svg.setPointerCapture(evt.pointerId);
       evt.preventDefault();
@@ -724,6 +739,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   });
 
   svg.addEventListener("pointermove", (evt) => {
+    if (readOnly && gesture?.mode !== "pan") return;
     const p = toSheet(evt);
     const sp = { x: snap(p.x), y: snap(p.y) };
 

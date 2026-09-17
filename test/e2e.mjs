@@ -164,7 +164,7 @@ const before = await page.evaluate(() => window.__spiceLab.store.state.comps.len
 
 // place a resistor by clicking the sheet
 await page.click('#partTools button[data-tool="R"]');
-const svgBox = await boxOf(page, "svg.sheet");
+const svgBox = await boxOf(page, "#sheetHost svg.sheet");
 await page.mouse.click(svgBox.x + svgBox.width * 0.75, svgBox.y + svgBox.height * 0.25);
 let after = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
 check("clicking the sheet places a part", after === before + 1, `${before} → ${after}`);
@@ -203,7 +203,7 @@ check("rotate advances the angle", rotated === 180, `rot = ${rotated}`);
 
 // box select
 await page.click('#modeTools button[data-tool="select"]');
-const bandBox = await boxOf(page, "svg.sheet");
+const bandBox = await boxOf(page, "#sheetHost svg.sheet");
 await page.mouse.move(bandBox.x + 8, bandBox.y + 8);
 await page.mouse.down();
 await page.mouse.move(bandBox.x + bandBox.width - 8, bandBox.y + bandBox.height - 8, { steps: 8 });
@@ -473,12 +473,12 @@ await page.evaluate(() => {
   const S = window.__spiceLab.store;
   S.selection = new Set([S.state.comps.find((c) => c.label === "R2").id]);
 });
-const dupBox = await boxOf(page, "svg.sheet");
+const dupBox = await boxOf(page, "#sheetHost svg.sheet");
 const dupBefore = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
 const r2pos = await page.evaluate(() => {
   const S = window.__spiceLab.store;
   const r2 = S.state.comps.find((c) => c.label === "R2");
-  const vb = document.querySelector("svg.sheet").getAttribute("viewBox").split(" ").map(Number);
+  const vb = document.querySelector("#sheetHost svg.sheet").getAttribute("viewBox").split(" ").map(Number);
   return { x: r2.x, y: r2.y, vb };
 });
 const toScreen = (sx, sy) => ({
@@ -512,11 +512,11 @@ const shiftBehaviour = await page.evaluate(() => {
   S.selection = new Set([a.id]);
   return { start: S.selection.size, aId: a.id, bId: b.id };
 });
-const shiftBox = await boxOf(page, "svg.sheet");
+const shiftBox = await boxOf(page, "#sheetHost svg.sheet");
 const posOf = await page.evaluate((id) => {
   const S = window.__spiceLab.store;
   const c = S.state.comps.find((k) => k.id === id);
-  const vb = document.querySelector("svg.sheet").getAttribute("viewBox").split(" ").map(Number);
+  const vb = document.querySelector("#sheetHost svg.sheet").getAttribute("viewBox").split(" ").map(Number);
   return { x: c.x, y: c.y, vb, wires: JSON.parse(JSON.stringify(S.state.wires)) };
 }, shiftBehaviour.bId);
 const pt = {
@@ -572,7 +572,7 @@ await page.click('#partTools button[data-tool="R"]');
 const kbBefore = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
 await page.keyboard.press("ArrowRight");
 await page.keyboard.press("ArrowDown");
-const caretShown = await page.evaluate(() => !!document.querySelector("svg.sheet .caret"));
+const caretShown = await page.evaluate(() => !!document.querySelector("#sheetHost svg.sheet .caret"));
 await page.keyboard.press("Enter");
 await page.waitForTimeout(200);
 const kbAfter = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
@@ -610,8 +610,8 @@ const openMarkers = await page.evaluate(() => {
   window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "divider";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
   const clean = {
-    pins: document.querySelectorAll("svg.sheet .pin.is-open").length,
-    ends: document.querySelectorAll("svg.sheet .wire-open").length
+    pins: document.querySelectorAll("#sheetHost svg.sheet .pin.is-open").length,
+    ends: document.querySelectorAll("#sheetHost svg.sheet .wire-open").length
   };
   const r1 = S.state.comps.find((c) => c.label === "R1");
   S.selection = new Set([r1.id]);
@@ -620,8 +620,8 @@ const openMarkers = await page.evaluate(() => {
   return {
     clean,
     broken: {
-      pins: document.querySelectorAll("svg.sheet .pin.is-open").length,
-      ends: document.querySelectorAll("svg.sheet .wire-open").length
+      pins: document.querySelectorAll("#sheetHost svg.sheet .pin.is-open").length,
+      ends: document.querySelectorAll("#sheetHost svg.sheet .wire-open").length
     }
   };
 });
@@ -641,14 +641,14 @@ await page.evaluate(() => {
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
 });
 await page.waitForTimeout(200);
-const wheelBox = await boxOf(page, "svg.sheet");
+const wheelBox = await boxOf(page, "#sheetHost svg.sheet");
 const readView = () => page.evaluate(() =>
-  Number(document.querySelector("svg.sheet").getAttribute("viewBox").split(" ")[2]));
+  Number(document.querySelector("#sheetHost svg.sheet").getAttribute("viewBox").split(" ")[2]));
 
 // A plain wheel must not be swallowed: it belongs to the page.
 const beforePlain = await readView();
 const plainDefaultPrevented = await page.evaluate(({ x, y }) => {
-  const svg = document.querySelector("svg.sheet");
+  const svg = document.querySelector("#sheetHost svg.sheet");
   const evt = new WheelEvent("wheel", { deltaY: 120, clientX: x, clientY: y, bubbles: true, cancelable: true });
   svg.dispatchEvent(evt);
   return evt.defaultPrevented;
@@ -660,7 +660,7 @@ check("a plain scroll over the sheet is left for the page",
 
 // A trackpad pinch arrives as a wheel event with ctrlKey set.
 const pinched = await page.evaluate(({ x, y }) => {
-  const svg = document.querySelector("svg.sheet");
+  const svg = document.querySelector("#sheetHost svg.sheet");
   const evt = new WheelEvent("wheel", { deltaY: -120, ctrlKey: true, clientX: x, clientY: y, bubbles: true, cancelable: true });
   svg.dispatchEvent(evt);
   return evt.defaultPrevented;
@@ -674,7 +674,7 @@ check("a pinch zooms the sheet", pinched === true && afterPinch < beforePlain,
 await page.click("#btnLockView");
 const lockedBefore = await readView();
 await page.evaluate(({ x, y }) => {
-  document.querySelector("svg.sheet").dispatchEvent(new WheelEvent("wheel",
+  document.querySelector("#sheetHost svg.sheet").dispatchEvent(new WheelEvent("wheel",
     { deltaY: -120, ctrlKey: true, clientX: x, clientY: y, bubbles: true, cancelable: true }));
 }, { x: wheelBox.x + wheelBox.width / 2, y: wheelBox.y + wheelBox.height / 2 });
 await page.waitForTimeout(120);
@@ -701,10 +701,10 @@ await page.evaluate(() => {
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
 });
 await page.waitForTimeout(200);
-const navBox = await boxOf(page, "svg.sheet");
+const navBox = await boxOf(page, "#sheetHost svg.sheet");
 
 const viewOf = () => page.evaluate(() => {
-  const vb = document.querySelector("svg.sheet").getAttribute("viewBox").split(" ").map(Number);
+  const vb = document.querySelector("#sheetHost svg.sheet").getAttribute("viewBox").split(" ").map(Number);
   return { x: vb[0], y: vb[1], w: vb[2], h: vb[3] };
 });
 
@@ -748,7 +748,7 @@ await page.waitForTimeout(150);
 
 // --- text tool places an annotation and opens an editor straight away
 await page.click('#modeTools button[data-tool="text"]');
-const textBox = await boxOf(page, "svg.sheet");
+const textBox = await boxOf(page, "#sheetHost svg.sheet");
 await page.mouse.click(textBox.x + textBox.width * 0.6, textBox.y + textBox.height * 0.3);
 await page.waitForTimeout(200);
 const noteEditor = await page.evaluate(() => ({
@@ -763,7 +763,7 @@ await page.keyboard.press("Enter");
 await page.waitForTimeout(200);
 const noteSaved = await page.evaluate(() => ({
   notes: window.__spiceLab.store.state.notes.map((n) => n.text),
-  onSheet: [...document.querySelectorAll('svg.sheet [data-edit="note"]')].map((n) => n.textContent),
+  onSheet: [...document.querySelectorAll('#sheetHost svg.sheet [data-edit="note"]')].map((n) => n.textContent),
   netlist: document.getElementById("netOut").value
 }));
 check("the annotation text is stored", noteSaved.notes[0] === "Divider output taken here", noteSaved.notes.join("|"));
@@ -775,7 +775,7 @@ check("annotations do not become circuit nodes",
 
 // an annotation left empty removes itself
 await page.click('#modeTools button[data-tool="text"]');
-const emptyBox = await boxOf(page, "svg.sheet");
+const emptyBox = await boxOf(page, "#sheetHost svg.sheet");
 await page.mouse.click(emptyBox.x + emptyBox.width * 0.3, emptyBox.y + emptyBox.height * 0.75);
 await page.waitForTimeout(200);
 await page.keyboard.press("Escape");
@@ -809,12 +809,12 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(200);
 await page.click('#modeTools button[data-tool="select"]');
-await boxOf(page, "svg.sheet");
+await boxOf(page, "#sheetHost svg.sheet");
 
 // Address R1 specifically: the first value text on the sheet belongs to V1.
 const r1Id = await page.evaluate(() =>
   window.__spiceLab.store.state.comps.find((c) => c.label === "R1").id);
-const valueText = page.locator(`svg.sheet [data-edit="value"][data-id="${r1Id}"]`);
+const valueText = page.locator(`#sheetHost svg.sheet [data-edit="value"][data-id="${r1Id}"]`);
 await dblclickCentered(page, valueText);
 const editorOpen = await page.evaluate(() => {
   const i = document.querySelector(".inline-edit");
@@ -849,7 +849,7 @@ check("Escape abandons the edit", !cancelled.values.includes("999") && cancelled
 check("the editor closes after cancelling", cancelled.editorGone);
 
 // the label is editable the same way
-const labelText = page.locator(`svg.sheet [data-edit="label"][data-id="${r1Id}"]`);
+const labelText = page.locator(`#sheetHost svg.sheet [data-edit="label"][data-id="${r1Id}"]`);
 await dblclickCentered(page, labelText);
 await page.keyboard.type("Rtop");
 await page.keyboard.press("Enter");
@@ -870,7 +870,7 @@ const dropdownOnly = await page.evaluate(async () => {
   return S.state.comps[0].id;
 });
 await page.waitForTimeout(150);
-await dblclickCentered(page, page.locator('svg.sheet [data-edit="value"][data-id]').first());
+await dblclickCentered(page, page.locator('#sheetHost svg.sheet [data-edit="value"][data-id]').first());
 await page.waitForTimeout(150);
 const routed = await page.evaluate(() => ({
   noEditor: !document.querySelector(".inline-edit"),

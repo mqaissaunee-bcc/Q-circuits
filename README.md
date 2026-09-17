@@ -234,7 +234,9 @@ src/
   scope.js          waveform plotting on a 2D canvas
   simulate.js       one path from sheet to results: probes, saved currents,
                     differential traces, parametric sweeps
-  labs.js           lab definitions, check builders and the check runner
+  labs.js           lab definitions, reference diagrams, check builders and
+                    the check runner
+  diagram.js        the floating, read-only Reference diagram window
   main.js           wiring: panels redraw from one refresh()
   styles.css        theme tokens, dark mode, responsive workspace
 test/e2e.mjs        end-to-end suite (Playwright)
@@ -372,6 +374,27 @@ How they behave:
 - The sheet title stands in for the Brookdale title block: each exercise
   checks it reads `LAB 04A` and so on.
 
+### Reference diagram
+
+Every lab has a **Reference diagram** button above the sheet. It opens a
+floating window, drawn by the same renderer as the sheet but read-only:
+
+- fix labs show the corrected circuit, simulate labs the supplied circuit
+  with the handout's markers, draw labs the circuit to draw, and the
+  explorations their starting circuit;
+- drag the title bar (or focus it and use the arrow keys) to move it, drag
+  the corner to resize it, drag inside it to pan, pinch or ⌘-scroll to zoom,
+  Esc to close;
+- it remembers its position and whether it was open; on a phone it docks
+  along the bottom and starts closed;
+- *The circuit in words* underneath lists every part, its value and the
+  nodes it joins, as the text equivalent of the drawing.
+
+The diagrams are data (`DIAGRAMS` in `src/labs.js`), not images, so they stay
+crisp and follow dark mode. `test/labs101.mjs` loads each one onto the sheet
+and requires it to pass its own lab. The window uses a store created with
+`{ persist: false }`, so it can never autosave over the student's work.
+
 ### Adding a lab
 
 Append to `ELEC101` (or a new array) in `src/labs.js` and give it a `group`
@@ -396,8 +419,11 @@ unnamed junction can still be described. Custom checks receive a context with
 `diffProbe(a, b)`, `currentProbe(label)`, `openEnds()`, `analysis`,
 `answers`, and the older `v(label, pin)`, `i(label)` and `part(label)`.
 
-Then add the correct solution to `test/labs101.mjs`, so the suite proves the
-lab can be passed and that its starting sheet cannot.
+Give it a reference diagram in `DIAGRAMS` (a `{ comps, wires, probes }`
+circuit; without one the window shows the starting circuit), then add an
+entry to `DIAGRAM_RUNS` in `test/labs101.mjs` with the title, analysis and
+answers that go with it. The suite then proves the lab can be passed and that
+its starting sheet cannot.
 
 ## Naming nodes, sweeping parameters
 
