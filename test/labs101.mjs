@@ -446,6 +446,29 @@ Object.assign(DIAGRAM_RUNS, {
   "e101-09d": { title: "LAB 09D", analysis: { type: "tran", trStop: "160u", trStep: "1u" }, answers: "9" }
 });
 
+const truth = (n, fn) => Object.fromEntries(Array.from({ length: 1 << n }, (_, m) => {
+  const bits = Array.from({ length: n }, (_, i) => (m >> (n - 1 - i)) & 1);
+  return [`tt${bits.join("")}`, String(fn(bits))];
+}));
+const t10 = { type: "tran", trStop: "8m", trStep: "0.8m" };
+const ac12 = { type: "ac", acStart: "100", acStop: "100meg", acPts: "101" };
+Object.assign(DIAGRAM_RUNS, {
+  "e101-10a": { title: "LAB 10A", analysis: t10, answers: truth(2, ([a, b]) => a | b) },
+  "e101-10b": { title: "LAB 10B", analysis: t10, answers: truth(2, ([a, b]) => 1 - (a | b)) },
+  "e101-10c": { title: "LAB 10C", analysis: t10, answers: truth(3, ([a, b, c]) => a & b & c) },
+  "e101-10d": { title: "LAB 10D", analysis: t10, answers: truth(3, ([a, b, c]) => 1 - (a & b & c)) },
+  "e101-10e": { title: "LAB 10E", analysis: t10, answers: { same: "7411", q111: "1", q110: "0" } },
+  "e101-11a": { title: "LAB 11A", analysis: { type: "tran", trStop: ".5m", trStep: "1u" }, answers: truth(2, ([a, b]) => a ^ b) },
+  "e101-11b": { title: "LAB 11B", analysis: { type: "tran", trStop: "0.5m", trStep: "1u" }, answers: { set: "1", reset: "0", both: "1" } },
+  "e101-11c": { title: "LAB 11C", analysis: { type: "tran", trStop: "10m", trStep: "0.1m", ffInit: "0" }, answers: { q45: "1", q82: "0", q99: "1" } },
+  "e101-11d": { title: "LAB 11D", analysis: { type: "tran", trStop: "32m", trStep: "0.1m", ffInit: "0" }, answers: { c115: "6", c205: "10", cmax: "15" } },
+  "e101-12a": { title: "LAB 12A", analysis: ac12, plot: { mode: "db", yMin: "0", yMax: "20" }, answers: "12" },
+  "e101-12b": { title: "LAB 12B", analysis: ac12, plot: { mode: "db", xMin: "100", xMax: "10meg", yMin: "20", yMax: "40" }, answers: "12" },
+  "e101-12c": { title: "LAB 12C", analysis: ac12, plot: { mode: "db", yMin: "0", yMax: "20" }, answers: "12" },
+  "e101-12d": { title: "LAB 12D", analysis: ac12, plot: { mode: "db", yMin: "1", yMax: "21" }, answers: "12" },
+  "e101-12e": { title: "LAB 12E", analysis: ac12, plot: { mode: "db", xMin: "100", xMax: "10meg", yMin: "20", yMax: "40" }, answers: "12" }
+});
+
 /**
  * Work out a lab's answers from the circuit now on the sheet, by running the
  * reference analysis here in the test. Deliberately not a hook in the app: a
@@ -476,6 +499,11 @@ const REF_ANSWERS = async (kind) => {
     const k = r.sweep.values.findIndex((f) => Math.abs(f - 10) < 0.01);
     return { gain: String(find(r, "v(b)", 0).db[k]) };
   }
+  if (kind === "12") {
+    const r = await L.simulate(S, null, { ...S.analysis, type: "ac", acPts: "50", acStart: "100", acStop: "100meg" });
+    const c = L.labs.corners(find(r, "v(out)"), r.sweep.values);
+    return { gain: String(c.peak), fhi: String(c.hi), _peak: c.peak, _hi: c.hi };
+  }
   if (kind === "9") {
     const r = await L.simulate(S, null, { ...S.analysis });
     const t = find(r, "v(in,out)");
@@ -498,9 +526,12 @@ for (const [id, run] of Object.entries(DIAGRAM_RUNS)) {
     }, "t");
     const answers = typeof run.answers === "string" ? await window.REF_ANSWERS(run.answers) : (run.answers || {});
     L.store.edit((s) => { s.answers = answers; }, "t");
+    const t0 = performance.now();
     const r = await window.T.check(id);
+    r.note = `${Math.round(performance.now() - t0)} ms to check` + (answers._peak ? `, gain ${answers._peak.toFixed(2)} dB, upper corner ${(answers._hi / 1e6).toFixed(2)} MHz` : "");
     return r;
   }, { id, run });
+  if (out.note) console.log(`   ${id}: ${out.note}`);
   check(`${id}: its reference diagram passes every check`, out.ok,
     out.error ? `engine: ${out.error.split("\n")[0]}` : out.failed.join(" | "));
 }
@@ -616,6 +647,117 @@ if (process.env.SHOTS) await page.locator(".scope-panel").screenshot({ path: "/t
 await page.click("#btnAxisAuto");
 const cleared = await page.evaluate(() => window.__spiceLab.store.state.plot);
 check("All automatic clears the ranges", !cleared.xMin && !cleared.yMax, JSON.stringify(cleared));
+
+console.log("\n— Labs 10 to 12 —");
+for (const id of ["e101-10a", "e101-10b", "e101-10c", "e101-10d", "e101-10e", "e101-11a", "e101-11b", "e101-11c", "e101-11d",
+  "e101-12a", "e101-12b", "e101-12c", "e101-12d", "e101-12e"]) {
+  const st = await page.evaluate(async (i) => { window.T.open(i); return window.T.check(i); }, id);
+  check(`${id}: the blank starting sheet does not pass`, !st.ok, `${st.failed.length} of ${st.n} fail`);
+}
+
+await loadSolved("e101-10a");
+const wrongGate = await page.evaluate(async () => {
+  window.T.set(() => { window.T.comp("U1A").device = "7408"; });
+  return (await window.T.check("e101-10a")).failed.join(" | ");
+});
+check("10A: the wrong part number is caught", /U1A has Device = 7408; it should be 7432/.test(wrongGate), wrongGate.slice(0, 120));
+check("10A: and the truth-table answers no longer match it", /Q when A = 0, B = 1/.test(wrongGate));
+
+await loadSolved("e101-10a");
+const reordered = await page.evaluate(async () => {
+  window.T.set((s) => { s.probes = [s.probes[1], s.probes[0], s.probes[2]]; });
+  return (await window.T.check("e101-10a")).failed.join(" | ");
+});
+check("10A: probes placed out of order are caught", /in the order B, A, Q/.test(reordered), reordered.slice(0, 120));
+
+await loadSolved("e101-10a");
+const shortStim = await page.evaluate(async () => {
+  window.T.set(() => { window.T.comp("DSTM1").commands = "0s 0; 1m 1; 2m 0"; });
+  return (await window.T.check("e101-10a")).failed.join(" | ");
+});
+check("10A: a stimulus table that stops early is caught", /DSTM1 has the handout's commands/.test(shortStim), shortStim.slice(0, 160));
+const badStim = await page.evaluate(() => {
+  window.T.set(() => { window.T.comp("DSTM1").commands = "0s 0; 2m 1; 1m 0"; });
+  window.__spiceLab.refresh();
+  return document.getElementById("checks").textContent;
+});
+check("a stimulus with times out of order is explained", /times must increase/.test(badStim), badStim.slice(0, 120));
+
+await loadSolved("e101-11c");
+const ffx = await page.evaluate(async () => {
+  window.T.set((s) => { s.analysis.ffInit = "X"; });
+  window.__spiceLab.refresh();
+  return { failed: (await window.T.check("e101-11c")).failed.join(" | "), warn: document.getElementById("checks").textContent };
+});
+check("11C: leaving flip-flops uninitialized is marked", /initialized to 0/.test(ffx.failed));
+check("11C: and the validator suggests the fix", /Initialize flip-flops to 0/.test(ffx.warn));
+
+await loadSolved("e101-11d");
+const net11d = await page.evaluate(() => { window.__spiceLab.refresh(); return document.getElementById("netOut").value; });
+check("11D: the netlist has no XSPICE devices or POLY sources", !/^A|POLY/im.test(net11d));
+check("11D: the logic 1 rail is driven once", (net11d.match(/^V_DIG_RAIL /gm) || []).length === 1);
+const warn11d = await page.evaluate(() => document.getElementById("checks").textContent);
+check("11D: unused Q̄ outputs raise no warnings", /Connectivity is clean/.test(warn11d), warn11d.slice(0, 160));
+const joined = await page.evaluate(async () => {
+  // join the clock to the clear bus where they cross
+  window.T.wire([180, 360, 170, 360]);
+  window.T.set((s) => {
+    const w = s.wires.find((k) => k.x1 === 180 && k.y1 === 420 && k.x2 === 180 && k.y2 === 240);
+    w.y2 = 360;
+    s.wires.push({ id: 88888, x1: 180, y1: 360, x2: 180, y2: 240 });
+  });
+  return (await window.T.check("e101-11d")).failed.join(" | ");
+});
+check("11D: a junction where the clock crosses the clear bus is caught", /should be on Clock|U1A/.test(joined), joined.slice(0, 160));
+
+await loadSolved("e101-11d");
+const lanes = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  await L.run();
+  return { digital: L.scope.isDigital(), panes: L.scope.paneCount(), names: L.getResult().traces.length };
+});
+check("11D: logic signals plot as one lane per probe", lanes.digital && lanes.panes === 5, JSON.stringify(lanes));
+const tabs = await page.evaluate(() => ({
+  digitalTab: document.querySelector('#partTools [data-tab="digital"]').getAttribute("aria-pressed"),
+  gateShown: !document.querySelector('#partTools [data-tool="JKFF"]').hidden,
+  resistorHidden: document.querySelector('#partTools [data-tool="R"]').hidden,
+  yHidden: document.getElementById("plotYLabel").closest(".field-grid-2").hidden,
+  toolbar: document.querySelector(".toolbar-strip").offsetHeight
+}));
+check("a digital lab switches the palette to Digital parts", tabs.digitalTab === "true" && tabs.gateShown && tabs.resistorHidden, JSON.stringify(tabs));
+check("Y ranges are hidden while logic lanes are showing", tabs.yHidden);
+check("the toolbar stays at two rows", tabs.toolbar < 140, `${tabs.toolbar}px`);
+if (process.env.SHOTS) {
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/11d.png" });
+  await page.locator(".scope-panel").screenshot({ path: "/tmp/11d-plot.png" });
+}
+
+await loadSolved("e101-12c");
+const net12 = await page.evaluate(() => { window.__spiceLab.refresh(); return document.getElementById("netOut").value; });
+check("12C: the LM324 is the handout's macromodel, as a subcircuit", /^XU1A \S+ \S+ VCC VEE OUT LM324$/m.test(net12) && /\.subckt LM324 1 2 3 4 5/.test(net12),
+  net12.split("\n").find((l) => l.startsWith("XU1A")));
+check("12C: with its POLY lines rewritten, so ngspice does not exit", !/POLY/i.test(net12) && /BFB 7 99 I = 42\.44E6\*I\(VB\)/.test(net12));
+const simple = await page.evaluate(async () => {
+  window.T.set(() => { window.T.comp("U1A").model = "Behavioral"; });
+  return (await window.T.check("e101-12c")).failed.join(" | ");
+});
+check("12C: the simple op-amp model is marked, as the handout asks for the LM324 model", /uses the Behavioral model; it should be LM324/.test(simple), simple.slice(0, 120));
+if (process.env.SHOTS) {
+  await loadSolved("e101-12e");
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/12e.png" });
+  await loadSolved("e101-10e");
+  await page.evaluate(async () => { window.__spiceLab.canvas.fit(); await window.__spiceLab.run(); });
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/10e.png" });
+  await page.locator(".scope-panel").screenshot({ path: "/tmp/10e-plot.png" });
+  await loadSolved("e101-11c");
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/11c.png" });
+  await loadSolved("e101-12b");
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/12b.png" });
+}
 
 const explorations = await page.evaluate(() => {
   const L = window.__spiceLab;

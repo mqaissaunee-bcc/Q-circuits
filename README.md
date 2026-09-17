@@ -237,6 +237,7 @@ src/
   labs.js           lab definitions, reference diagrams, check builders and
                     the check runner
   diagram.js        the floating, read-only Reference diagram window
+  digital.js        gates, the 7473, STIM1 and DigClock from behavioural sources
   main.js           wiring: panels redraw from one refresh()
   styles.css        theme tokens, dark mode, responsive workspace
 test/e2e.mjs        end-to-end suite (Playwright)
@@ -334,8 +335,8 @@ and only the ones actually used reach the netlist.
 ## Labs
 
 The lab list is grouped. **Explorations** are the original five guided labs.
-The **ELEC 101** groups are the PSpice lab exercises (Labs 4–9), rebuilt as
-twenty checked exercises:
+The **ELEC 101** groups are the PSpice lab exercises (Labs 4–12), rebuilt as
+thirty-four checked exercises:
 
 | Exercise | Kind | What the student does |
 |---|---|---|
@@ -356,6 +357,13 @@ twenty checked exercises:
 | 8C Sweeping C1 | draw | C1 = {CVAL}, CVAL stepped 1u to 3u by 0.5u, read the corners at both ends |
 | 8D Transformer | draw | Insert TX1 (10u : 10m, k 0.975), RS and RD, Y 10–30 dB, read the +29.8 dB gain |
 | 9A–9D Pulse inputs | draw | RANDOM, SQUARE, TRIANGLE and VRAMP sources into R1–C1, transient runs, probes on IN, OUT and V(IN,OUT), read its maximum and minimum |
+| 10A–10E Logic gates | draw | 7432, 7402, 7411, 7410 and 7410→7404 with STIM1 sources from the handout's tables; probes in order; truth tables read from the simulation |
+| 11A XOR | draw | 7486 with two DigClocks; truth table |
+| 11B RS latch | draw | Two cross-coupled 7400s; set, reset and the forbidden state |
+| 11C JK flip-flop | draw | 7473 with three clocks and a Clear stimulus, flip-flops initialized to 0; Q at three times |
+| 11D Counter | draw | Four 7473s and two 7408s; the count at two times and its highest value |
+| 12A–12B Transistor amplifiers | draw | One- and two-stage Q2N2222 common-emitter amplifiers, 100 Hz–100 MEG; gain and upper corner |
+| 12C–12E Op-amp amplifiers | draw | LM324 inverting, non-inverting and two-stage inverting, using the handout's macromodel; gain and upper corner |
 
 How they behave:
 
@@ -463,10 +471,46 @@ its starting sheet cannot.
   range, and the ranges and the dB/magnitude/phase choice are saved with the
   circuit so labs can check them.
 
+### Digital parts
+
+This ngspice build has no XSPICE, so there are no event-driven digital
+devices: an `A` line is an unknown device, and a `POLY` source makes the
+engine exit fatally. Digital parts are therefore built from behavioural
+sources (`src/digital.js`), as TTL looks from outside: 0 V is 0, 5 V is 1.
+
+- **Gates** (Gate, Gate3, NOT) are smooth logic functions,
+  `½(1 + tanh(4(v − 2.5)))` combined with ordinary algebra, driving the
+  output through 1 kΩ into about 10 pF. The smoothness gives Newton a slope
+  to follow; the RC is a 10 ns propagation delay. Each gate's capacitor is a
+  few percent different, fixed by its name, because perfectly matched gates
+  let a latch released from its forbidden state ring forever.
+- **7473** is a real master–slave JK flip-flop built from nine of those
+  gates, so its output changes as the clock falls and CLR̄ forces it to 0.
+  *Initialize flip-flops to* in the Analysis panel is PSpice's option of the
+  same name, emitted as `.ic` cards.
+- **STIM1** takes PSpice's COMMAND list as `0s 0; 1m 1; 2m 0` and becomes a
+  PWL source. **DigClock** takes OFFTIME, ONTIME, DELAY, STARTVAL and OPPVAL
+  and becomes a PULSE source. Both switch in 10 ns. Slower edges leave the
+  flip-flop's two latches half open together, and it changes on the wrong
+  clock edge.
+- **$D_HI** connects to a 5 V rail. Every gate input has a 1 MΩ pull-up to
+  that rail, as a floating TTL input reads high, which also keeps an
+  unconnected input solvable.
+- Circuits made only of digital parts need no ground symbol, as in PSpice.
+  An unused flip-flop output raises no warning.
+- With digital parts on the sheet, a transient plot draws **logic lanes**: a
+  0/1 strip per probe, top to bottom in the order the probes were placed.
+- The palette has **Analog** and **Digital** tabs; opening a Lab 10 or 11
+  exercise switches to Digital. Keyboard shortcuts reach every part either
+  way.
+
 ### PSpice models
 
-`Q2N2222` (the card from the Lab 6 handout), `Q2N3904`, `Q2N3906` and
-`D1N750` are in the model lists. The D1N750 card is trimmed: the library
+`Q2N2222` (the card from the Lab 6 and 12 handouts), `Q2N3904`, `Q2N3906`
+and `D1N750` are in the model lists. The LM324 part's *Model* is the Lab 12
+handout's PSpice macromodel by default, as a subcircuit, with its two `POLY`
+lines rewritten as the same polynomials in behavioural sources; *Behavioral*
+is the simpler two-stage model. Lab 5A keeps the simple model. The D1N750 card is trimmed: the library
 version's `Nbv`, `Ibvl` and `Nbvl` make this ngspice build exit fatally,
 which takes the engine down for the rest of the session.
 

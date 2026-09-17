@@ -184,6 +184,15 @@
             <input type="checkbox" id="trUic">
             <label for="trUic">Start from the initial conditions (uic)</label>
           </div>
+          <div class="field">
+            <label for="ffInit">Initialize flip-flops to</label>
+            <select id="ffInit">
+              <option value="X">X (unknown)</option>
+              <option value="0">0</option>
+              <option value="1">1</option>
+            </select>
+            <p class="field-hint">PSpice's Gate-level Simulation option. Only matters with flip-flops on the sheet.</p>
+          </div>
         </div>
 
         <div id="fieldsAC" hidden>

@@ -20,6 +20,7 @@
 import { buildNodes, nodesFor, nodeAtPoint, formatEng, parseValue, paramValues } from "./netlist.js";
 import { lastValue } from "./engine.js";
 import { PARTS, pinsOf, netNameOf } from "./parts.js";
+import { parseStimulus, logicOf, RAIL } from "./digital.js";
 import { simulate, traceAt, probeTraceName } from "./simulate.js";
 
 const near = (a, b, tol) => isFinite(a) && Math.abs(a - b) <= tol;
@@ -324,6 +325,7 @@ function makeContext(state, result, ref) {
   };
   const named = (name) => {
     if (name === "0" || lc(name) === "gnd") return 0;
+    if (name === RAIL) return state.comps.some((c) => c.type === "DHI") ? RAIL : undefined;
     const c = state.comps.find((k) => lc(netNameOf(k)) === lc(name));
     return c ? net.pinNode.get(`${c.id}:0`) : undefined;
   };
@@ -353,6 +355,7 @@ function makeContext(state, result, ref) {
 
   const describeSpec = (spec) => {
     if (spec === 0 || spec === "0") return "ground";
+    if (spec === RAIL) return "logic 1 ($D_HI)";
     if (typeof spec === "string") return spec;
     if (Array.isArray(spec)) {
       const c = part(spec[0]);
@@ -362,7 +365,8 @@ function makeContext(state, result, ref) {
     if (spec && spec.other) return `the far end of ${spec.other}`;
     return "?";
   };
-  const describeNode = (n) => (n === 0 ? "ground" : n === undefined ? "nothing" : typeof n === "string" ? n : `node ${n}`);
+  const describeNode = (n) => (n === 0 ? "ground" : n === undefined ? "nothing"
+    : n === RAIL ? "logic 1 ($D_HI)" : typeof n === "string" ? n : `node ${n}`);
 
   const volt = (res, nd) => {
     if (nd === undefined || nd === null) return NaN;
@@ -689,6 +693,97 @@ const K = {
     };
   },
 
+  /** A gate's inputs, in any order, and its output. */
+  gate(label, inputs, out) {
+    return {
+      label: `${label}'s inputs are ${inputs.join(", ")} and its output is ${out}`,
+      test: (ctx) => {
+        const c = ctx.part(label);
+        if (!c) return { pass: false, detail: `there is no part called ${label}` };
+        const nodes = nodesFor(c, ctx.net);
+        const ins = nodes.slice(0, -1), o = nodes[nodes.length - 1];
+        const want = inputs.map(ctx.resolve);
+        const missing = inputs.find((n, i) => want[i] === undefined);
+        if (missing) return { pass: false, detail: `nothing is named ${ctx.describeSpec(missing)}` };
+        const sorted = (a) => a.map(String).sort().join("|");
+        if (sorted(ins) !== sorted(want)) {
+          return { pass: false, detail: `its inputs are on ${ins.map(ctx.describeNode).join(", ")}` };
+        }
+        const wo = ctx.resolve(out);
+        return { pass: o === wo, detail: o === wo ? "" : `its output is on ${ctx.describeNode(o)}` };
+      }
+    };
+  },
+
+  /** Specific pins of a many-pinned part: { pinIndex: spec }. */
+  pins(label, map, text) {
+    return {
+      label: text,
+      test: (ctx) => {
+        const c = ctx.part(label);
+        if (!c) return { pass: false, detail: `there is no part called ${label}` };
+        const nodes = nodesFor(c, ctx.net);
+        for (const [i, spec] of Object.entries(map)) {
+          const want = ctx.resolve(spec);
+          if (want === undefined || nodes[i] !== want) {
+            return { pass: false, detail: `${label} ${PARTS[c.type].pinNames[i]} should be on ${ctx.describeSpec(spec)}; it is on ${ctx.describeNode(nodes[i])}` };
+          }
+        }
+        return { pass: true, detail: "" };
+      }
+    };
+  },
+
+  /** Voltage probes placed in this order, as PSpice stacks them. */
+  probeOrder(names) {
+    return {
+      label: `Voltage probes on ${names.join(", ")}, placed in that order`,
+      test: (ctx) => {
+        const want = names.map(ctx.resolve);
+        const got = ctx.probes.filter((p) => p.kind === "v").map((p) => p.node);
+        const missing = names.filter((n, i) => !got.includes(want[i]));
+        if (missing.length) return { pass: false, detail: `no probe on ${missing.join(", ")} yet` };
+        const order = got.filter((n) => want.includes(n));
+        const ok = want.every((n, i) => order[i] === n);
+        const shown = order.map((n) => names[want.indexOf(n)]);
+        return { pass: ok, detail: ok ? "" : `they are in the order ${shown.join(", ")}. Remove them and place them again` };
+      }
+    };
+  },
+
+  /** A STIM1 source whose commands give the handout's waveform up to `until`. */
+  stim(label, commands, until) {
+    const ref = parseStimulus(commands, parseValue).points;
+    const level = (pts, t) => { let v = pts[0]?.[1] ?? 0; for (const [tt, vv] of pts) if (tt <= t) v = vv; return v; };
+    return {
+      label: `${label} has the handout's commands, at least up to ${formatEng(until, 3)} s`,
+      test: (ctx) => {
+        const c = ctx.part(label);
+        if (!c) return { pass: false, detail: `there is no part called ${label}` };
+        if (c.type !== "STIM") return { pass: false, detail: `${label} should be a digital stimulus (STIM1)` };
+        const { points, error } = parseStimulus(c.commands, parseValue);
+        if (error) return { pass: false, detail: error };
+        const step = until / 400;
+        for (let t = step / 2; t < until; t += step) {
+          if (level(points, t) !== level(ref, t)) {
+            return { pass: false, detail: `at ${formatEng(t, 3)} s it is ${level(points, t)}; the table says ${level(ref, t)}` };
+          }
+        }
+        return { pass: true, detail: "" };
+      }
+    };
+  },
+
+  ffInit(value) {
+    return {
+      label: `Flip-flops are initialized to ${value}`,
+      test: (ctx) => {
+        const v = ctx.analysis.ffInit ?? "X";
+        return { pass: v === value, detail: v === value ? "" : `Initialize flip-flops to is ${v}. It is in the Analysis panel, under the transient settings` };
+      }
+    };
+  },
+
   /** A check that needs the simulation to have run. */
   sim(label, test) {
     return { label, sim: true, test };
@@ -806,7 +901,7 @@ const LAB05A = {
     G(220, 140, 90),
     P("R", 240, 140, 0, { label: "RIN1", value: "10k" }),
     P("R", 380, 140, 0, { label: "RF1", value: "20k" }),
-    P("OPAMP5", 400, 300, 0, { label: "U1", gain: "100k", gbw: "1meg", headroom: "1.5" }),
+    P("OPAMP5", 400, 300, 0, { label: "U1", model: "Behavioral", gain: "100k", gbw: "1meg", headroom: "1.5" }),
     PWR(440, 240, "VCC"), PWR(440, 360, "VEE", 180),
 
     P("R", 540, 300, 0, { label: "R2", value: "15.9k" }),
@@ -816,7 +911,7 @@ const LAB05A = {
     G(560, 140, 90),
     P("R", 580, 140, 0, { label: "RIN2", value: "10k" }),
     P("R", 720, 140, 0, { label: "RF2", value: "20k" }),
-    P("OPAMP5", 700, 280, 0, { label: "U2", gain: "100k", gbw: "1meg", headroom: "1.5" }),
+    P("OPAMP5", 700, 280, 0, { label: "U2", model: "Behavioral", gain: "100k", gbw: "1meg", headroom: "1.5" }),
     PWR(740, 220, "VCC"), PWR(740, 340, "VEE", 180),
     NET(820, 140, "OUT")
   ],
@@ -936,6 +1031,233 @@ function extreme(ctx, which) {
   if (!t) return NaN;
   return which === "max" ? Math.max(...t.values) : Math.min(...t.values);
 }
+
+
+/* ------------------------------------------------ digital readings */
+
+/**
+ * The logic level of `out` while the inputs hold the combination `want`,
+ * read at the end of the first stretch where they do, when the output has
+ * had the longest to settle. NaN if the combination never occurs.
+ */
+function logicWhile(ctx, res, inputs, out, want) {
+  const ts = res?.sweep?.values;
+  const tin = inputs.map((n) => ctx.nodeTrace(n, null, res));
+  const tout = ctx.nodeTrace(out, null, res);
+  if (!ts || !tout || tin.some((t) => !t)) return NaN;
+  let start = -1;
+  for (let k = 0; k < ts.length; k++) {
+    const ok = tin.every((t, i) => logicOf(t.values[k]) === want[i]);
+    if (ok && start < 0) start = k;
+    const closes = start >= 0 && (!ok || k === ts.length - 1);
+    if (closes) {
+      const end = ok ? k : k - 1;
+      if (ts[end] - ts[start] > 0) return logicOf(tout.values[end]);
+      start = -1;
+    }
+  }
+  return NaN;
+}
+
+/** Logic level of a node at time t. */
+function logicAt(ctx, res, node, t) {
+  const tr = ctx.nodeTrace(node, null, res);
+  const ts = res?.sweep?.values;
+  if (!tr || !ts) return NaN;
+  // The last point at or before t: a transient's points are wherever the
+  // solver put them, so there is no tolerance to apply as for a DC sweep.
+  let k = 0;
+  while (k < ts.length - 1 && ts[k + 1] <= t) k++;
+  return logicOf(tr.values[k]);
+}
+
+/** Truth-table questions for a gate, one per input combination. */
+function truthQuestions(inputs, out) {
+  const rows = [];
+  for (let m = 0; m < 1 << inputs.length; m++) {
+    const want = inputs.map((_, i) => (m >> (inputs.length - 1 - i)) & 1);
+    rows.push({
+      id: `tt${want.join("")}`,
+      prompt: `${out} when ${inputs.map((n, i) => `${n} = ${want[i]}`).join(", ")}`,
+      abs: 0,
+      expect: (ctx) => logicWhile(ctx, ctx.ref, inputs, out, want)
+    });
+  }
+  return rows;
+}
+
+const DSTM_TABLE = (period, count) => Array.from({ length: count }, (_, i) =>
+  `${i ? `${+(i * period).toPrecision(6)}m` : "0s"} ${i % 2}`).join("; ");
+
+/** The Lab 10 command tables, 16 commands each. */
+const DSTM1_CMDS = DSTM_TABLE(1, 16);
+const DSTM2_CMDS = DSTM_TABLE(2, 16);
+const DSTM3_CMDS = DSTM_TABLE(0.5, 16);
+
+/* Lab 10: one gate at a time, with the handout's stimulus tables. */
+const LAB10_SOURCES2 = [["DSTM1", DSTM1_CMDS, "A"], ["DSTM2", DSTM2_CMDS, "B"]];
+const LAB10_SOURCES3 = [...LAB10_SOURCES2, ["DSTM3", DSTM3_CMDS, "C"]];
+const STIM_PARTS2 = { DSTM1: { type: "STIM" }, DSTM2: { type: "STIM" } };
+const STIM_PARTS3 = { ...STIM_PARTS2, DSTM3: { type: "STIM" } };
+const logicCheck = (inputs, out, fn) => (ctx) => {
+  for (let m = 0; m < 1 << inputs.length; m++) {
+    const want = inputs.map((_, i) => (m >> (inputs.length - 1 - i)) & 1);
+    const got = logicWhile(ctx, ctx.result, inputs, out, want);
+    if (got !== fn(want)) return { pass: false, detail: `with ${inputs.map((n, i) => `${n} = ${want[i]}`).join(", ")}, ${out} is ${got}` };
+  }
+  return { pass: true, detail: "" };
+};
+const STIM_STEPS = (n) => [
+  `Place ${n} Digital stimulus (STIM1) parts on the left, named DSTM1${n === 3 ? ", DSTM2 and DSTM3" : " and DSTM2"}. Give each the commands from the handout's table, as time and level pairs separated by semicolons: DSTM1 is 0s 0; 1m 1; 2m 0; 3m 1 …, DSTM2 changes every 2m${n === 3 ? ", DSTM3 every 0.5m" : ""}. The run only uses the first 8m.`,
+  `Wire each stimulus to one gate input, and name those wires A, B${n === 3 ? " and C" : ""}.`
+];
+
+const LAB10 = [
+  { letter: "a", title: "OR gate", sources: LAB10_SOURCES2,
+    summary: "A 7432 OR gate driven by two digital stimuli. The output is 1 when either input is.",
+    steps: ["Place a 2-input gate (Gate), set its Device to 7432 OR, and name it U1A.", ...STIM_STEPS(2),
+      "Run a short wire from the output and name it Q."],
+    parts: { U1A: { type: "GATE2", fields: { device: "7432" } }, ...STIM_PARTS2 },
+    wiring: [K.gate("U1A", ["A", "B"], "Q")], probes: ["A", "B", "Q"],
+    questions: truthQuestions(["A", "B"], "Q"),
+    simLabel: "Q follows A OR B", simTest: logicCheck(["A", "B"], "Q", ([a, b]) => a | b) },
+  { letter: "b", title: "NOR gate", from: "e101-10a", sources: LAB10_SOURCES2,
+    summary: "Swap the OR for a 7402 NOR: the same function, inverted.",
+    steps: ["Start from your 10A circuit. Select U1A and change its Device to 7402 NOR.",
+      "Double-click the Q alias and rename it QBAR."],
+    parts: { U1A: { type: "GATE2", fields: { device: "7402" } }, ...STIM_PARTS2 },
+    wiring: [K.gate("U1A", ["A", "B"], "QBAR")], probes: ["A", "B", "QBAR"],
+    questions: truthQuestions(["A", "B"], "QBAR"),
+    simLabel: "QBAR is NOT (A OR B)", simTest: logicCheck(["A", "B"], "QBAR", ([a, b]) => 1 - (a | b)) },
+  { letter: "c", title: "3-input AND gate", from: "e101-10a", sources: LAB10_SOURCES3,
+    summary: "A 7411 three-input AND gate: 1 only when all three inputs are.",
+    steps: ["Start from your 10A circuit. Delete the 7432 and place a 3-input gate (Gate3) set to 7411 AND, named U1A.",
+      "Move DSTM2 and its wire so it meets the middle input.",
+      "Add DSTM3 below, with the handout's commands (it changes every 0.5m), wire it to the bottom input, and name that wire C.",
+      "Keep Q on the output."],
+    parts: { U1A: { type: "GATE3", fields: { device: "7411" } }, ...STIM_PARTS3 },
+    wiring: [K.gate("U1A", ["A", "B", "C"], "Q")], probes: ["A", "B", "C", "Q"],
+    questions: truthQuestions(["A", "B", "C"], "Q"),
+    simLabel: "Q follows A AND B AND C", simTest: logicCheck(["A", "B", "C"], "Q", ([a, b, c]) => a & b & c) },
+  { letter: "d", title: "3-input NAND gate", from: "e101-10c", sources: LAB10_SOURCES3,
+    summary: "Swap the AND for a 7410 NAND.",
+    steps: ["Start from your 10C circuit. Change U1A's Device to 7410 NAND.", "Rename the Q alias QBAR."],
+    parts: { U1A: { type: "GATE3", fields: { device: "7410" } }, ...STIM_PARTS3 },
+    wiring: [K.gate("U1A", ["A", "B", "C"], "QBAR")], probes: ["A", "B", "C", "QBAR"],
+    questions: truthQuestions(["A", "B", "C"], "QBAR"),
+    simLabel: "QBAR is NOT (A AND B AND C)", simTest: logicCheck(["A", "B", "C"], "QBAR", ([a, b, c]) => 1 - (a & b & c)) },
+  { letter: "e", title: "NAND then NOT", from: "e101-10d", sources: LAB10_SOURCES3,
+    summary: "Put a 7404 inverter after the 7410. Two inversions cancel: the pair behaves like one gate you have already used.",
+    steps: ["Start from your 10D circuit.",
+      "Place an Inverter (NOT, 7404), U2A, to the right. Wire QBAR to its input.",
+      "Run a short wire from its output and name it Q."],
+    parts: { U1A: { type: "GATE3", fields: { device: "7410" } }, U2A: { type: "INV" }, ...STIM_PARTS3 },
+    wiring: [K.gate("U1A", ["A", "B", "C"], "QBAR"), K.gate("U2A", ["QBAR"], "Q")], probes: ["A", "B", "C", "QBAR", "Q"],
+    questions: [
+      { id: "same", prompt: "Which single part number behaves like the 7410 followed by the 7404?", abs: 0, expect: () => 7411 },
+      { id: "q111", prompt: "Q when A = 1, B = 1, C = 1", abs: 0, expect: (ctx) => logicWhile(ctx, ctx.ref, ["A", "B", "C"], "Q", [1, 1, 1]) },
+      { id: "q110", prompt: "Q when A = 1, B = 1, C = 0", abs: 0, expect: (ctx) => logicWhile(ctx, ctx.ref, ["A", "B", "C"], "Q", [1, 1, 0]) }
+    ],
+    simLabel: "Q is A AND B AND C again", simTest: logicCheck(["A", "B", "C"], "Q", ([a, b, c]) => a & b & c) }
+];
+
+/* Lab 11 */
+const CLK = (off, on, start, opp) => ({ offtime: off, ontime: on, delay: "0", startval: String(start), oppval: String(opp) });
+const CLEAR_CMDS = "0s 1; 2.2m 0; 2.3m 1; 7.9m 0; 8.6m 1";
+
+/** Q3 Q2 Q1 Q0 as a number at time t. */
+function countAt(ctx, t, res = ctx.ref) {
+  return ["Q0", "Q1", "Q2", "Q3"].reduce((sum, q, i) => sum + (logicAt(ctx, res, q, t) << i), 0);
+}
+
+/* Lab 12 */
+const SUPPLY_SPLIT = { VS1: { dc: 18, type: "V" }, VS2: { dc: 18, type: "V" } };
+const SUPPLY_WIRING = [["VS1", ["VCC", 0], true], ["VS2", [0, "VEE"], true]];
+const LM = { type: "OPAMP5", model: "LM324" };
+const OPAMP_STEPS = [
+  "Place the split supply: VS1 and VS2 (DC 18), stacked + up, with their junction grounded, a VCC power symbol on VS1 + and a VEE symbol (rotated 180°) on VS2 −.",
+  "Place the LM324 and keep its Model on LM324 (PSpice macromodel): that is the model the handout has you type in. Its inverting input is on top."
+];
+const LAB12 = [
+  { letter: "a", title: "Common-emitter amplifier", gain: 19.9, axis: { yMin: 0, yMax: 20 }, axisText: "Y from 0 to 20",
+    summary: "One Q2N2222 stage with voltage-divider bias, a partly bypassed emitter resistor, and coupling capacitors in and out.",
+    steps: [
+      "Place VS2 (DC 18) with a VCC power symbol on its + side and its − side grounded.",
+      "Draw the amplifier from the handout: R1 62k and R2 10k divide VCC for the base; RC 2700 to the collector; RE1 100 then RE2 420 below the emitter, with CE 47u across RE2.",
+      "Q1 is an NPN with its Model set to Q2N2222 (the handout's card).",
+      "VS1 (DC 0, AC 1) drives the base through C1 = 2u. The collector drives OUT through C2 = 2u, and RL = 1800 loads OUT to ground."
+    ],
+    parts: {
+      VS1: { dc: 0, ac: 1, type: "V" }, VS2: { dc: 18, type: "V" }, Q1: { model: "Q2N2222" },
+      R1: "62k", R2: "10k", RC: "2700", RE1: "100", RE2: "420", CE: "47u", C1: "2u", C2: "2u", RL: "1800"
+    },
+    wiring: [
+      ["VS2", ["VCC", 0], true],
+      ["C1", [["VS1", 0], ["Q1", 0]]], ["VS1", [{ other: "C1", from: ["Q1", 0] }, 0], true],
+      ["R1", ["VCC", ["Q1", 0]]], ["R2", [["Q1", 0], 0]],
+      ["RC", ["VCC", ["Q1", 1]]], ["RE1", [["Q1", 2], { other: "RE1", from: ["Q1", 2] }]],
+      ["RE2", [{ other: "RE1", from: ["Q1", 2] }, 0]], ["CE", [{ other: "RE1", from: ["Q1", 2] }, 0]],
+      ["C2", [["Q1", 1], "OUT"]], ["RL", ["OUT", 0]]
+    ],
+    extra: [] },
+  { letter: "b", title: "Two-stage amplifier", from: "e101-12a", gain: 39.4,
+    axis: { xMin: 100, xMax: 10e6, yMin: 20, yMax: 40 }, axisText: "X from 100 to 10MEG and Y from 20 to 40",
+    summary: "Two common-emitter stages in cascade, the first coupled to the second through C2. Gains in dB add.",
+    steps: [
+      "Start from your 12A circuit if you like. Rename its parts for the first stage: RC1, RE1A, RE1B, CE1.",
+      "Add the second stage: R3 62k and R4 10k bias Q2 (Q2N2222); RC2 2700; RE2A 200 and RE2B 330 with CE2 47u across RE2B.",
+      "Couple Q1's collector to Q2's base through C2 = 2u. Q2's collector drives OUT through C3 = 2u into RL = 1800."
+    ],
+    parts: {
+      VS1: { dc: 0, ac: 1, type: "V" }, VS2: { dc: 18, type: "V" }, Q1: { model: "Q2N2222" }, Q2: { model: "Q2N2222" },
+      R1: "62k", R2: "10k", RC1: "2700", RE1A: "100", RE1B: "420", CE1: "47u",
+      R3: "62k", R4: "10k", RC2: "2700", RE2A: "200", RE2B: "330", CE2: "47u",
+      C1: "2u", C2: "2u", C3: "2u", RL: "1800"
+    },
+    wiring: [
+      ["VS2", ["VCC", 0], true],
+      ["C1", [["VS1", 0], ["Q1", 0]]], ["VS1", [{ other: "C1", from: ["Q1", 0] }, 0], true],
+      ["R1", ["VCC", ["Q1", 0]]], ["R2", [["Q1", 0], 0]], ["RC1", ["VCC", ["Q1", 1]]],
+      ["RE1A", [["Q1", 2], { other: "RE1A", from: ["Q1", 2] }]],
+      ["RE1B", [{ other: "RE1A", from: ["Q1", 2] }, 0]], ["CE1", [{ other: "RE1A", from: ["Q1", 2] }, 0]],
+      ["C2", [["Q1", 1], ["Q2", 0]]],
+      ["R3", ["VCC", ["Q2", 0]]], ["R4", [["Q2", 0], 0]], ["RC2", ["VCC", ["Q2", 1]]],
+      ["RE2A", [["Q2", 2], { other: "RE2A", from: ["Q2", 2] }]],
+      ["RE2B", [{ other: "RE2A", from: ["Q2", 2] }, 0]], ["CE2", [{ other: "RE2A", from: ["Q2", 2] }, 0]],
+      ["C3", [["Q2", 1], "OUT"]], ["RL", ["OUT", 0]]
+    ],
+    extra: [] },
+  { letter: "c", title: "Inverting op-amp amplifier", gain: 20, axis: { yMin: 0, yMax: 20 }, axisText: "Y from 0 to 20",
+    summary: "An LM324 with a gain of −RF/R1 = −10, which is 20 dB. RCM matches the resistance each input sees.",
+    steps: [...OPAMP_STEPS,
+      "VS (DC 0, AC 1) drives the inverting input through R1 = 1k. RF = 10k runs from that input to the output, OUT.",
+      "RCM = 990 runs from the non-inverting input to ground. Wire V+ to VCC and V− to VEE with power symbols."],
+    parts: { ...SUPPLY_SPLIT, VS: { dc: 0, ac: 1, type: "V" }, R1: "1k", RF: "10k", RCM: "990", U1A: LM },
+    wiring: [...SUPPLY_WIRING, ["R1", [["VS", 0], ["U1A", 0]]], ["VS", [{ other: "R1", from: ["U1A", 0] }, 0], true],
+      ["RF", [["U1A", 0], "OUT"]], ["RCM", [["U1A", 1], 0]]],
+    extra: [K.pins("U1A", { 2: "OUT", 3: "VCC", 4: "VEE" }, "U1A's output is OUT and its supplies are VCC and VEE")] },
+  { letter: "d", title: "Non-inverting op-amp amplifier", from: "e101-12c", gain: 20.83,
+    axis: { yMin: 1, yMax: 21 }, axisText: "Y from 1 to 21",
+    summary: "The same parts rearranged for a gain of 1 + RF/R1 = 11, about 20.8 dB, with the input on the non-inverting side.",
+    steps: [...OPAMP_STEPS,
+      "R1 = 1k runs from the inverting input to ground; RF = 10k from the inverting input to OUT.",
+      "VS (DC 0, AC 1) drives the non-inverting input directly. There is no RCM."],
+    parts: { ...SUPPLY_SPLIT, VS: { dc: 0, ac: 1, type: "V" }, R1: "1k", RF: "10k", U1A: LM },
+    wiring: [...SUPPLY_WIRING, ["R1", [["U1A", 0], 0]], ["RF", [["U1A", 0], "OUT"]], ["VS", [["U1A", 1], 0], true]],
+    extra: [K.pins("U1A", { 2: "OUT", 3: "VCC", 4: "VEE" }, "U1A's output is OUT and its supplies are VCC and VEE")] },
+  { letter: "e", title: "Two-stage inverting amplifier", from: "e101-12c", gain: 40,
+    axis: { xMin: 100, xMax: 10e6, yMin: 20, yMax: 40 }, axisText: "X from 100 to 10MEG and Y from 20 to 40",
+    summary: "Two 20 dB inverting stages in a row: 40 dB, and the two inversions cancel.",
+    steps: ["Start from your 12C circuit. Rename RF and RCM to RF1 and RCM1.",
+      "Add a second stage, U1B (LM324): R2 = 1k from U1A's output to U1B's inverting input, RF2 = 10k from there to OUT, RCM2 = 990 from its non-inverting input to ground.",
+      "Wire U1B's supplies to VCC and VEE."],
+    parts: { ...SUPPLY_SPLIT, VS: { dc: 0, ac: 1, type: "V" }, R1: "1k", RF1: "10k", RCM1: "990", R2: "1k", RF2: "10k", RCM2: "990", U1A: LM, U1B: LM },
+    wiring: [...SUPPLY_WIRING, ["R1", [["VS", 0], ["U1A", 0]]], ["VS", [{ other: "R1", from: ["U1A", 0] }, 0], true],
+      ["RF1", [["U1A", 0], ["U1A", 2]]], ["RCM1", [["U1A", 1], 0]],
+      ["R2", [["U1A", 2], ["U1B", 0]]], ["RF2", [["U1B", 0], "OUT"]], ["RCM2", [["U1B", 1], 0]]],
+    extra: [K.pins("U1A", { 3: "VCC", 4: "VEE" }, "U1A is powered from VCC and VEE"),
+      K.pins("U1B", { 2: "OUT", 3: "VCC", 4: "VEE" }, "U1B's output is OUT and its supplies are VCC and VEE")] }
+];
 
 const ELEC101 = [
   /* ---------------------------------------------------------- Lab 4 */
@@ -1720,6 +2042,265 @@ const ELEC101 = [
         return { pass: near(hi, p.outMax, 0.05), detail: isFinite(hi) ? `OUT peaks at ${formatEng(hi, 4)} V` : "no result at OUT" };
       })
     ]
+  })),
+
+  /* --------------------------------------------------------- Lab 10 */
+  ...LAB10.map((g) => ({
+    id: `e101-10${g.letter}`,
+    group: "e101-10",
+    code: `10${g.letter.toUpperCase()}`,
+    kind: "draw",
+    carryFrom: g.from,
+    title: `10${g.letter.toUpperCase()} · ${g.title}`,
+    summary: g.summary,
+    tasks: [
+      `Type LAB 10${g.letter.toUpperCase()} in the circuit name box.`,
+      ...g.steps,
+      "In Analysis, choose Transient: stop time 8m, time step 0.8m.",
+      `Pick Probe and click ${g.probes.join(", then ")}, in that order. Logic signals plot as separate 0/1 lanes, top to bottom in the order you placed them.`,
+      "Run it, then read the output for each input combination and fill in the truth table below."
+    ],
+    questions: g.questions,
+    circuit: blank(`10${g.letter.toUpperCase()}`),
+    useStudentAnalysis: true,
+    reference: { type: "tran", trStep: "0.05m", trStop: "8m", trUic: false },
+    checks: [
+      K.title(`10${g.letter.toUpperCase()}`),
+      K.parts(g.parts, "Every part has the part number and name from the handout"),
+      ...g.sources.map(([ref, cmds]) => K.stim(ref, cmds, 8e-3)),
+      K.wiring(g.sources.map(([ref, , net]) => [ref, [net], true]), "Each stimulus drives its own named node"),
+      ...g.wiring,
+      K.tran(8e-3, 0.8e-3),
+      K.probeOrder(g.probes),
+      K.sim(g.simLabel, g.simTest)
+    ]
+  })),
+
+  /* --------------------------------------------------------- Lab 11 */
+  {
+    id: "e101-11a",
+    group: "e101-11",
+    code: "11A",
+    kind: "draw",
+    title: "11A · XOR with clock inputs",
+    summary: "An exclusive-OR gate fed by two digital clocks at different rates, so every input combination comes round in half a millisecond.",
+    tasks: [
+      "Type LAB 11A in the circuit name box.",
+      "Place a 2-input gate (Gate) and set its Device to 7486 XOR. Name it U1A.",
+      "Place two DigClock sources, DSTM1 above-left and DSTM2 below-left. DSTM1: OFFTIME .2m, ONTIME .2m. DSTM2: OFFTIME .1m, ONTIME .1m. Leave DELAY 0, STARTVAL 0, OPPVAL 1.",
+      "Wire DSTM1 to the top input and DSTM2 to the bottom input, and run a short wire from the output.",
+      "Net aliases: A on the DSTM1 wire, B on the DSTM2 wire, Q at the end of the output wire.",
+      "In Analysis, choose Transient: stop time .5m, time step 1u.",
+      "Probe A, then B, then Q, in that order. Run it and fill in the truth table."
+    ],
+    questions: truthQuestions(["A", "B"], "Q"),
+    circuit: blank("11A"),
+    useStudentAnalysis: true,
+    reference: { type: "tran", trStep: "2u", trStop: "0.5m", trUic: false },
+    checks: [
+      K.title("11A"),
+      K.parts({
+        U1A: { type: "GATE2", fields: { device: "7486" } },
+        DSTM1: { type: "DCLK", fields: CLK(".2m", ".2m", 0, 1) },
+        DSTM2: { type: "DCLK", fields: CLK(".1m", ".1m", 0, 1) }
+      }, "Every part has the part number and settings from the handout"),
+      K.wiring([["DSTM1", ["A"], true], ["DSTM2", ["B"], true]], "Each clock drives its own named node"),
+      K.gate("U1A", ["A", "B"], "Q"),
+      K.tran(0.5e-3, 1e-6),
+      K.probeOrder(["A", "B", "Q"]),
+      K.sim("Q is 1 exactly when A and B differ", (ctx) => {
+        const bad = [[0, 0], [0, 1], [1, 0], [1, 1]].find(([a, b]) => logicWhile(ctx, ctx.result, ["A", "B"], "Q", [a, b]) !== (a ^ b));
+        return { pass: !bad, detail: bad ? `with A = ${bad[0]}, B = ${bad[1]} the output is wrong` : "" };
+      })
+    ]
+  },
+
+  {
+    id: "e101-11b",
+    group: "e101-11",
+    code: "11B",
+    kind: "draw",
+    title: "11B · RS latch",
+    summary: "Two NAND gates, each feeding the other, make a latch: a circuit that remembers. SBAR low sets Q, RBAR low resets it, and with both high it holds whatever it last had.",
+    tasks: [
+      "Type LAB 11B in the circuit name box.",
+      "Place two 2-input gates, U1A and U1B, both 7400 NAND, U1B below U1A.",
+      "Place DigClock DSTM1 at U1A's top input: OFFTIME 75u, ONTIME 75u, STARTVAL 1, OPPVAL 0. Place DSTM2 at U1B's bottom input: OFFTIME .15m, ONTIME .15m, STARTVAL 0, OPPVAL 1.",
+      "Run a wire from each output to the right. Name them Q (U1A) and QBAR (U1B), and name the input wires SBAR (DSTM1) and RBAR (DSTM2).",
+      "Cross-couple the gates: Q to U1B's top input, and QBAR to U1A's bottom input. The handout draws these as diagonals; here route them around with right angles. Where they cross, there must be no dot.",
+      "In Analysis, choose Transient: stop time 0.5m, time step 1u.",
+      "Probe SBAR, RBAR, Q, then QBAR. Run it and answer the questions below from the lanes."
+    ],
+    questions: [
+      { id: "set", prompt: "Q while SBAR = 0 and RBAR = 1", abs: 0, expect: (ctx) => logicWhile(ctx, ctx.ref, ["SBAR", "RBAR"], "Q", [0, 1]) },
+      { id: "reset", prompt: "Q while SBAR = 1 and RBAR = 0", abs: 0, expect: (ctx) => logicWhile(ctx, ctx.ref, ["SBAR", "RBAR"], "Q", [1, 0]) },
+      { id: "both", prompt: "QBAR while SBAR = 0 and RBAR = 0 (the state a latch should avoid)", abs: 0,
+        expect: (ctx) => logicWhile(ctx, ctx.ref, ["SBAR", "RBAR"], "QBAR", [0, 0]) }
+    ],
+    circuit: blank("11B"),
+    useStudentAnalysis: true,
+    reference: { type: "tran", trStep: "1u", trStop: "0.5m", trUic: false },
+    checks: [
+      K.title("11B"),
+      K.parts({
+        U1A: { type: "GATE2", fields: { device: "7400" } },
+        U1B: { type: "GATE2", fields: { device: "7400" } },
+        DSTM1: { type: "DCLK", fields: CLK("75u", "75u", 1, 0) },
+        DSTM2: { type: "DCLK", fields: CLK(".15m", ".15m", 0, 1) }
+      }, "Every part has the part number and settings from the handout"),
+      K.wiring([["DSTM1", ["SBAR"], true], ["DSTM2", ["RBAR"], true]], "The clocks drive SBAR and RBAR"),
+      K.gate("U1A", ["SBAR", "QBAR"], "Q"),
+      K.gate("U1B", ["Q", "RBAR"], "QBAR"),
+      K.tran(0.5e-3, 1e-6),
+      K.probeOrder(["SBAR", "RBAR", "Q", "QBAR"]),
+      K.sim("The latch sets, resets and holds", (ctx) => {
+        const set = logicWhile(ctx, ctx.result, ["SBAR", "RBAR"], "Q", [0, 1]);
+        const reset = logicWhile(ctx, ctx.result, ["SBAR", "RBAR"], "Q", [1, 0]);
+        return { pass: set === 1 && reset === 0, detail: `set gives Q = ${set}, reset gives Q = ${reset}` };
+      })
+    ]
+  },
+
+  {
+    id: "e101-11c",
+    group: "e101-11",
+    code: "11C",
+    kind: "draw",
+    title: "11C · JK flip-flop",
+    summary: "A 7473 JK flip-flop driven by three clocks and a clear line. Its output changes only when the clock falls: J = 1 sets it, K = 1 resets it, both toggle it, and CLEAR low forces it to 0.",
+    tasks: [
+      "Type LAB 11C in the circuit name box.",
+      "Place a JK flip-flop (7473) and name it U1A.",
+      "Place three DigClocks on the left: DSTM1 to J (OFFTIME 2.5m, ONTIME 2.5m, STARTVAL 0, OPPVAL 1), DSTM2 to CLK (OFFTIME .75m, ONTIME .75m, STARTVAL 1, OPPVAL 0), DSTM3 to K (OFFTIME 4.5m, ONTIME 4.5m, STARTVAL 0, OPPVAL 1).",
+      "Below them place a STIM1 (Digital stimulus), name it Clear, wire it to CLR, and give it the commands 0s 1; 2.2m 0; 2.3m 1; 7.9m 0; 8.6m 1.",
+      "Run a short wire from Q. Net aliases: J, Clock, K, Clear on the input wires, and Q on the output.",
+      "In Analysis, choose Transient: stop time 10m, time step 0.1m, and set Initialize flip-flops to 0.",
+      "Probe Clear, Clock, J, K, then Q. Run it and read Q at the times below."
+    ],
+    questions: [
+      { id: "q45", prompt: "Q at 4.5 ms (0 or 1)", abs: 0, expect: (ctx) => logicAt(ctx, ctx.ref, "Q", 4.5e-3) },
+      { id: "q82", prompt: "Q at 8.2 ms, while Clear is low", abs: 0, expect: (ctx) => logicAt(ctx, ctx.ref, "Q", 8.2e-3) },
+      { id: "q99", prompt: "Q at 9.9 ms", abs: 0, expect: (ctx) => logicAt(ctx, ctx.ref, "Q", 9.9e-3) }
+    ],
+    circuit: blank("11C"),
+    useStudentAnalysis: true,
+    reference: { type: "tran", trStep: "0.05m", trStop: "10m", trUic: false, ffInit: "0" },
+    checks: [
+      K.title("11C"),
+      K.parts({
+        U1A: { type: "JKFF" },
+        DSTM1: { type: "DCLK", fields: CLK("2.5m", "2.5m", 0, 1) },
+        DSTM2: { type: "DCLK", fields: CLK(".75m", ".75m", 1, 0) },
+        DSTM3: { type: "DCLK", fields: CLK("4.5m", "4.5m", 0, 1) }
+      }, "Every part has the part number and settings from the handout"),
+      K.stim("Clear", CLEAR_CMDS, 10e-3),
+      K.pins("U1A", { 0: "J", 1: "Clock", 2: "K", 3: "Clear", 4: "Q" }, "U1A's J, CLK, K, CLR and Q are on J, Clock, K, Clear and Q"),
+      K.wiring([["DSTM1", ["J"], true], ["DSTM2", ["Clock"], true], ["DSTM3", ["K"], true], ["Clear", ["Clear"], true]],
+        "Each source drives its own named node"),
+      K.tran(10e-3, 0.1e-3),
+      K.ffInit("0"),
+      K.probeOrder(["Clear", "Clock", "J", "K", "Q"]),
+      K.sim("Q sets on the falling clock edge after J goes high", (ctx) => {
+        const q = logicAt(ctx, ctx.result, "Q", 4.5e-3);
+        return { pass: q === 1, detail: `Q at 4.5 ms is ${q}` };
+      })
+    ]
+  },
+
+  {
+    id: "e101-11d",
+    group: "e101-11",
+    code: "11D",
+    kind: "draw",
+    title: "11D · Synchronous counter",
+    summary: "Four 7473s clocked together, with two AND gates deciding which ones toggle. Q0 toggles every clock, Q1 when Q0 is 1, Q2 when Q0 and Q1 are, and so on: a binary count.",
+    tasks: [
+      "Type LAB 11D in the circuit name box.",
+      "Place four JK flip-flops, U1A, U1B, U2A and U2B, left to right, and two 2-input gates, U3A and U3B, set to 7408 AND, above them.",
+      "Place a $D_HI (logic 1) and wire it to U1A's J and K. Wire every CLR to the same logic 1 line.",
+      "Place a DigClock, DSTM1: OFFTIME 1m, ONTIME 1m, STARTVAL 1, OPPVAL 0. Name its wire Clock and run it to all four CLK inputs. Where it crosses other wires there must be no dot.",
+      "Name the Q outputs Q0 (U1A), Q1 (U1B), Q2 (U2A) and Q3 (U2B). Leave the Q̄ outputs open.",
+      "Wire Q0 to U1B's J and K. U3A takes Q1 and Q0; its output goes to U2A's J and K. U3B takes Q2 and U3A's output; its output goes to U2B's J and K.",
+      "In Analysis, choose Transient: stop time 32m, time step 0.1m, and Initialize flip-flops to 0.",
+      "Probe Clock, Q3, Q2, Q1, then Q0. Run it. Read Q3 Q2 Q1 Q0 as a binary number to answer the questions."
+    ],
+    questions: [
+      { id: "c115", prompt: "The count (Q3 Q2 Q1 Q0 as a decimal number) at 11.5 ms", abs: 0, expect: (ctx) => countAt(ctx, 11.5e-3) },
+      { id: "c205", prompt: "The count at 20.5 ms", abs: 0, expect: (ctx) => countAt(ctx, 20.5e-3) },
+      { id: "cmax", prompt: "The highest count it reaches before starting again", abs: 0,
+        expect: (ctx) => Math.max(...Array.from({ length: 32 }, (_, i) => countAt(ctx, (i + 0.5) * 1e-3))) }
+    ],
+    circuit: blank("11D"),
+    useStudentAnalysis: true,
+    reference: { type: "tran", trStep: "0.1m", trStop: "32m", trUic: false, ffInit: "0" },
+    checks: [
+      K.title("11D"),
+      K.parts({
+        U1A: { type: "JKFF" }, U1B: { type: "JKFF" }, U2A: { type: "JKFF" }, U2B: { type: "JKFF" },
+        U3A: { type: "GATE2", fields: { device: "7408" } },
+        U3B: { type: "GATE2", fields: { device: "7408" } },
+        DSTM1: { type: "DCLK", fields: CLK("1m", "1m", 1, 0) }
+      }, "Every part has the part number and settings from the handout"),
+      K.wiring([["DSTM1", ["Clock"], true]], "The clock drives the Clock node"),
+      K.pins("U1A", { 0: RAIL, 1: "Clock", 2: RAIL, 3: RAIL, 4: "Q0" }, "U1A: J and K high, clocked, output Q0"),
+      K.pins("U1B", { 0: "Q0", 1: "Clock", 2: "Q0", 3: RAIL, 4: "Q1" }, "U1B: J and K from Q0, output Q1"),
+      K.gate("U3A", ["Q1", "Q0"], ["U2A", 0]),
+      K.pins("U2A", { 1: "Clock", 2: ["U2A", 0], 3: RAIL, 4: "Q2" }, "U2A: J and K from U3A, output Q2"),
+      K.gate("U3B", ["Q2", ["U2A", 0]], ["U2B", 0]),
+      K.pins("U2B", { 1: "Clock", 2: ["U2B", 0], 3: RAIL, 4: "Q3" }, "U2B: J and K from U3B, output Q3"),
+      K.tran(32e-3, 0.1e-3),
+      K.ffInit("0"),
+      K.probeOrder(["Clock", "Q3", "Q2", "Q1", "Q0"]),
+      K.sim("It counts up by one on each falling clock edge", (ctx) => {
+        const got = Array.from({ length: 16 }, (_, i) => countAt(ctx, (i + 0.5) * 1e-3, ctx.result));
+        const want = got.map((_, i) => Math.floor((i + 1) / 2));
+        const ok = got.every((v, i) => v === want[i]);
+        return { pass: ok, detail: ok ? "" : `the first counts are ${got.join(", ")}` };
+      })
+    ]
+  },
+
+  /* --------------------------------------------------------- Lab 12 */
+  ...LAB12.map((a) => ({
+    id: `e101-12${a.letter}`,
+    group: "e101-12",
+    code: `12${a.letter.toUpperCase()}`,
+    kind: "draw",
+    carryFrom: a.from,
+    title: `12${a.letter.toUpperCase()} · ${a.title}`,
+    summary: a.summary,
+    tasks: [
+      `Type LAB 12${a.letter.toUpperCase()} in the circuit name box.`,
+      ...a.steps,
+      "In Analysis, choose AC sweep: start 100, stop 100MEG, 101 points per decade.",
+      "Probe OUT (the plot opens in dB), and run it.",
+      `Under Axis ranges set ${a.axisText}. The minor gridlines are already there.`,
+      "Enter the mid-band gain, and the frequency where the gain has fallen 3 dB below it at the high end."
+    ],
+    questions: [
+      { id: "gain", prompt: "Mid-band gain, in dB", abs: 0.3,
+        expect: (ctx) => corners(ctx.nodeTrace("OUT", null, ctx.ref), ctx.ref?.sweep?.values).peak },
+      { id: "fhi", prompt: "Upper −3 dB frequency, in Hz (SPICE suffixes work: 4.5meg)", rel: 0.1,
+        expect: (ctx) => corners(ctx.nodeTrace("OUT", null, ctx.ref), ctx.ref?.sweep?.values).hi }
+    ],
+    circuit: blank(`12${a.letter.toUpperCase()}`),
+    useStudentAnalysis: true,
+    reference: { type: "ac", acPts: "50", acStart: "100", acStop: "100meg", paramOn: false },
+    checks: [
+      K.title(`12${a.letter.toUpperCase()}`),
+      K.parts(a.parts, "Every part has the name, value and model from the handout"),
+      K.wiring(a.wiring),
+      ...a.extra,
+      K.noOpenEnds(),
+      K.ac(100, 100e6, 101),
+      K.probe("OUT", "OUT"),
+      K.dbMode(),
+      K.axis(a.axis),
+      K.sim(`OUT has about ${a.gain} dB of gain`, (ctx) => {
+        const g = corners(ctx.nodeTrace("OUT"), ctx.result?.sweep?.values).peak;
+        return { pass: near(g, a.gain, 0.6), detail: isFinite(g) ? `OUT peaks at ${formatEng(g, 3)} dB` : "no AC result at OUT" };
+      })
+    ]
   }))
 ];
 
@@ -1926,13 +2507,262 @@ function D09(p) {
   };
 }
 
+/* Lab 10: gates with their stimuli on the left. */
+const STIM = (x, y, label, commands) => P("STIM", x, y, 0, { label, commands });
+const D10_2 = (device, out) => ({
+  comps: [
+    P("GATE2", 300, 200, 0, { label: "U1A", device }),
+    STIM(200, 140, "DSTM1", DSTM1_CMDS), STIM(200, 260, "DSTM2", DSTM2_CMDS),
+    NET(240, 140, "A"), NET(240, 260, "B"), NET(460, 200, out)
+  ],
+  wires: [
+    W(200, 140, 260, 140), W(260, 140, 260, 180), W(260, 180, 300, 180),
+    W(200, 260, 260, 260), W(260, 260, 260, 220), W(260, 220, 300, 220),
+    W(380, 200, 460, 200)
+  ],
+  probes: [vp(240, 140), vp(240, 260), vp(460, 200)]
+});
+const D10_3_BASE = (device) => ({
+  comps: [
+    P("GATE3", 300, 200, 0, { label: "U1A", device }),
+    STIM(200, 120, "DSTM1", DSTM1_CMDS), STIM(200, 200, "DSTM2", DSTM2_CMDS), STIM(200, 280, "DSTM3", DSTM3_CMDS),
+    NET(240, 120, "A"), NET(240, 200, "B"), NET(240, 280, "C")
+  ],
+  wires: [
+    W(200, 120, 260, 120), W(260, 120, 260, 180), W(260, 180, 300, 180),
+    W(200, 200, 300, 200),
+    W(200, 280, 260, 280), W(260, 280, 260, 220), W(260, 220, 300, 220)
+  ]
+});
+const D10_3 = (device, out) => {
+  const b = D10_3_BASE(device);
+  return {
+    comps: [...b.comps, NET(460, 200, out)],
+    wires: [...b.wires, W(380, 200, 460, 200)],
+    probes: [vp(240, 120), vp(240, 200), vp(240, 280), vp(460, 200)]
+  };
+};
+const D10E = (() => {
+  const b = D10_3_BASE("7410");
+  return {
+    comps: [...b.comps, P("INV", 500, 200, 0, { label: "U2A", device: "7404" }), NET(460, 200, "QBAR"), NET(660, 200, "Q")],
+    wires: [...b.wires, W(380, 200, 500, 200), W(580, 200, 660, 200)],
+    probes: [vp(240, 120), vp(240, 200), vp(240, 280), vp(460, 200), vp(660, 200)]
+  };
+})();
+
+/* Lab 11 */
+const DCLK = (x, y, label, off, on, start, opp) => P("DCLK", x, y, 0, { label, ...CLK(off, on, start, opp) });
+const D11A = {
+  comps: [
+    P("GATE2", 300, 200, 0, { label: "U1A", device: "7486" }),
+    DCLK(200, 120, "DSTM1", ".2m", ".2m", 0, 1), DCLK(200, 280, "DSTM2", ".1m", ".1m", 0, 1),
+    NET(240, 120, "A"), NET(240, 280, "B"), NET(460, 200, "Q")
+  ],
+  wires: [
+    W(200, 120, 260, 120), W(260, 120, 260, 180), W(260, 180, 300, 180),
+    W(200, 280, 260, 280), W(260, 280, 260, 220), W(260, 220, 300, 220),
+    W(380, 200, 460, 200)
+  ],
+  probes: [vp(240, 120), vp(240, 280), vp(460, 200)]
+};
+const D11B = {
+  comps: [
+    P("GATE2", 300, 140, 0, { label: "U1A", device: "7400" }),
+    P("GATE2", 300, 300, 0, { label: "U1B", device: "7400" }),
+    DCLK(200, 120, "DSTM1", "75u", "75u", 1, 0), DCLK(200, 320, "DSTM2", ".15m", ".15m", 0, 1),
+    NET(240, 120, "SBAR"), NET(240, 320, "RBAR"), NET(460, 140, "Q"), NET(460, 300, "QBAR")
+  ],
+  wires: [
+    W(200, 120, 300, 120), W(200, 320, 300, 320),
+    W(380, 140, 460, 140), W(380, 300, 460, 300),
+    // Q back to U1B's top input, QBAR back to U1A's bottom input; the two
+    // runs cross at (280, 240) without joining.
+    W(420, 140, 420, 200), W(420, 200, 280, 200), W(280, 200, 280, 280), W(280, 280, 300, 280),
+    W(440, 300, 440, 240), W(440, 240, 260, 240), W(260, 240, 260, 160), W(260, 160, 300, 160)
+  ],
+  probes: [vp(240, 120), vp(240, 320), vp(460, 140), vp(460, 300)]
+};
+const D11C = {
+  comps: [
+    P("JKFF", 400, 200, 0, { label: "U1A", device: "7473" }),
+    DCLK(240, 80, "DSTM1", "2.5m", "2.5m", 0, 1),
+    DCLK(240, 200, "DSTM2", ".75m", ".75m", 1, 0),
+    DCLK(240, 320, "DSTM3", "4.5m", "4.5m", 0, 1),
+    STIM(240, 400, "Clear", CLEAR_CMDS),
+    NET(320, 80, "J"), NET(320, 200, "Clock"), NET(320, 320, "K"), NET(320, 400, "Clear"), NET(540, 160, "Q")
+  ],
+  wires: [
+    W(240, 80, 360, 80), W(360, 80, 360, 160), W(360, 160, 400, 160),
+    W(240, 200, 400, 200),
+    W(240, 320, 360, 320), W(360, 320, 360, 240), W(360, 240, 400, 240),
+    W(240, 400, 440, 400), W(440, 400, 440, 280),
+    W(480, 160, 540, 160)
+  ],
+  probes: [vp(320, 400), vp(320, 200), vp(320, 80), vp(320, 320), vp(540, 160)]
+};
+const FF = (x, label) => P("JKFF", x, 240, 0, { label, device: "7473" });
+const D11D = {
+  comps: [
+    FF(200, "U1A"), FF(360, "U1B"), FF(600, "U2A"), FF(880, "U2B"),
+    P("GATE2", 480, 120, 0, { label: "U3A", device: "7408" }),
+    P("GATE2", 760, 120, 0, { label: "U3B", device: "7408" }),
+    P("DHI", 140, 200, 0, { label: "HI1" }),
+    DCLK(120, 420, "DSTM1", "1m", "1m", 1, 0),
+    NET(140, 420, "Clock"), NET(300, 60, "Q0"), NET(460, 60, "Q1"), NET(700, 60, "Q2"), NET(980, 60, "Q3")
+  ],
+  wires: [
+    // logic 1 to U1A's J and K, and the clear bus
+    W(140, 200, 200, 200), W(160, 200, 160, 280), W(160, 280, 200, 280), W(160, 280, 160, 360),
+    W(160, 360, 920, 360),
+    W(240, 320, 240, 360), W(400, 320, 400, 360), W(640, 320, 640, 360), W(920, 320, 920, 360),
+    // clock bus, crossing the clear bus and the K wires without joining
+    W(120, 420, 840, 420),
+    W(180, 420, 180, 240), W(180, 240, 200, 240),
+    W(340, 420, 340, 240), W(340, 240, 360, 240),
+    W(560, 420, 560, 240), W(560, 240, 600, 240),
+    W(840, 420, 840, 240), W(840, 240, 880, 240),
+    // Q0
+    W(280, 200, 360, 200), W(300, 60, 300, 200), W(320, 200, 320, 280), W(320, 280, 360, 280),
+    W(300, 140, 480, 140),
+    // Q1
+    W(440, 200, 460, 200), W(460, 60, 460, 200), W(460, 100, 480, 100),
+    // T2 = Q0·Q1, to U2A's J and K and on to U3B
+    W(560, 120, 580, 120), W(580, 120, 580, 200), W(580, 200, 600, 200),
+    W(580, 200, 580, 280), W(580, 280, 600, 280),
+    W(580, 160, 740, 160), W(740, 160, 740, 140), W(740, 140, 760, 140),
+    // Q2
+    W(680, 200, 700, 200), W(700, 60, 700, 200), W(700, 100, 760, 100),
+    // T3 = Q2·T2, to U2B's J and K
+    W(840, 120, 860, 120), W(860, 120, 860, 200), W(860, 200, 880, 200),
+    W(860, 200, 860, 280), W(860, 280, 880, 280),
+    // Q3
+    W(960, 200, 980, 200), W(980, 60, 980, 200)
+  ],
+  probes: [vp(140, 420), vp(980, 60), vp(700, 60), vp(460, 60), vp(300, 60)]
+};
+
+/* Lab 12 */
+const R_ = (x, y, rot, label, value) => P("R", x, y, rot, { label, value });
+const C_ = (x, y, rot, label, value) => P("C", x, y, rot, { label, value, ic: "" });
+const V_ = (x, y, label, value, ac = "") => P("V", x, y, 90, { label, value, ac });
+const Q_ = (x, y, label) => P("NPN", x, y, 0, { label, model: "Q2N2222" });
+const U_ = (x, y, label) => P("OPAMP5", x, y, 0, { label, model: "LM324", gain: "100k", gbw: "1meg", headroom: "1.5" });
+
+const D12A = {
+  comps: [
+    V_(60, 120, "VS2", "DC 18"), PWR(60, 100, "VCC"), G(60, 200), PWR(340, 60, "VCC"),
+    R_(240, 120, 90, "R1", "62k"), R_(440, 120, 90, "RC", "2700"),
+    Q_(400, 280, "Q1"), R_(240, 340, 90, "R2", "10k"),
+    C_(140, 280, 0, "C1", "2u"), V_(80, 380, "VS1", "DC 0", "1"),
+    R_(440, 340, 90, "RE1", "100"), R_(440, 440, 90, "RE2", "420"), C_(520, 440, 90, "CE", "47u"),
+    C_(500, 200, 0, "C2", "2u"), R_(620, 300, 90, "RL", "1800"), NET(620, 200, "OUT"),
+    G(340, 580)
+  ],
+  wires: [
+    W(60, 100, 60, 120), W(60, 180, 60, 200),
+    W(240, 60, 440, 60), W(240, 60, 240, 120), W(440, 60, 440, 120),
+    W(440, 180, 440, 240),
+    W(240, 180, 240, 280), W(240, 280, 240, 340), W(240, 280, 400, 280), W(200, 280, 240, 280),
+    W(80, 380, 80, 280), W(80, 280, 140, 280),
+    W(440, 320, 440, 340), W(440, 400, 440, 440), W(440, 420, 520, 420), W(520, 420, 520, 440),
+    W(440, 200, 500, 200), W(560, 200, 620, 200), W(620, 200, 620, 300),
+    W(80, 440, 80, 560), W(240, 400, 240, 560), W(440, 500, 440, 560), W(520, 500, 520, 560),
+    W(620, 360, 620, 560), W(80, 560, 620, 560), W(340, 560, 340, 580)
+  ],
+  probes: [vp(620, 200)]
+};
+
+const D12B = {
+  comps: [
+    V_(60, 120, "VS2", "DC 18"), PWR(60, 100, "VCC"), G(60, 200), PWR(520, 60, "VCC"),
+    R_(240, 120, 90, "R1", "62k"), R_(400, 120, 90, "RC1", "2700"),
+    Q_(360, 280, "Q1"), R_(240, 340, 90, "R2", "10k"),
+    C_(140, 280, 0, "C1", "2u"), V_(80, 380, "VS1", "DC 0", "1"),
+    R_(400, 340, 90, "RE1A", "100"), R_(400, 440, 90, "RE1B", "420"), C_(480, 440, 90, "CE1", "47u"),
+    C_(500, 280, 0, "C2", "2u"),
+    R_(600, 120, 90, "R3", "62k"), R_(600, 340, 90, "R4", "10k"),
+    Q_(720, 280, "Q2"), R_(760, 120, 90, "RC2", "2700"),
+    R_(760, 340, 90, "RE2A", "200"), R_(760, 440, 90, "RE2B", "330"), C_(840, 440, 90, "CE2", "47u"),
+    C_(840, 200, 0, "C3", "2u"), R_(960, 300, 90, "RL", "1800"), NET(960, 200, "OUT"),
+    G(520, 580)
+  ],
+  wires: [
+    W(60, 100, 60, 120), W(60, 180, 60, 200),
+    W(240, 60, 760, 60), W(240, 60, 240, 120), W(400, 60, 400, 120), W(600, 60, 600, 120), W(760, 60, 760, 120),
+    W(400, 180, 400, 240),
+    W(240, 180, 240, 280), W(240, 280, 240, 340), W(240, 280, 360, 280), W(200, 280, 240, 280),
+    W(80, 380, 80, 280), W(80, 280, 140, 280),
+    W(400, 320, 400, 340), W(400, 400, 400, 440), W(400, 420, 480, 420), W(480, 420, 480, 440),
+    W(400, 200, 460, 200), W(460, 200, 460, 280), W(460, 280, 500, 280),
+    W(600, 180, 600, 280), W(600, 280, 600, 340), W(560, 280, 600, 280), W(600, 280, 720, 280),
+    W(760, 180, 760, 240),
+    W(760, 320, 760, 340), W(760, 400, 760, 440), W(760, 420, 840, 420), W(840, 420, 840, 440),
+    W(760, 200, 840, 200), W(900, 200, 960, 200), W(960, 200, 960, 300),
+    W(80, 440, 80, 560), W(240, 400, 240, 560), W(400, 500, 400, 560), W(480, 500, 480, 560),
+    W(600, 400, 600, 560), W(760, 500, 760, 560), W(840, 500, 840, 560), W(960, 360, 960, 560),
+    W(80, 560, 960, 560), W(520, 560, 520, 580)
+  ],
+  probes: [vp(960, 200)]
+};
+
+/** The split ±18 V supply of 12C–12E. */
+const SPLIT = {
+  comps: [V_(60, 140, "VS1", "DC 18"), V_(60, 200, "VS2", "DC 18"), PWR(60, 120, "VCC"), PWR(60, 280, "VEE", 180), G(100, 200, 270)],
+  wires: [W(60, 120, 60, 140), W(60, 260, 60, 280), W(60, 200, 100, 200)]
+};
+/** One op-amp stage, U at (x0 + 140, 260), with its supplies. */
+const STAGE = (x0, label) => ({
+  comps: [U_(x0 + 140, 260, label), PWR(x0 + 180, 200, "VCC"), PWR(x0 + 180, 320, "VEE", 180)],
+  wires: [W(x0 + 180, 200, x0 + 180, 220), W(x0 + 180, 300, x0 + 180, 320),
+    W(x0 + 100, 120, x0 + 100, 240), W(x0 + 100, 240, x0 + 140, 240),
+    W(x0 + 220, 260, x0 + 280, 260), W(x0 + 280, 260, x0 + 280, 120)]
+});
+const join = (...parts) => ({
+  comps: parts.flatMap((p) => p.comps || []),
+  wires: parts.flatMap((p) => p.wires || []),
+  probes: parts.flatMap((p) => p.probes || [])
+});
+
+const D12C = join(SPLIT, STAGE(240, "U1A"), {
+  comps: [V_(180, 300, "VS", "DC 0", "1"), G(180, 380), R_(240, 120, 0, "R1", "1k"), R_(400, 120, 0, "RF", "10k"),
+    R_(340, 320, 90, "RCM", "990"), G(340, 400), NET(560, 120, "OUT")],
+  wires: [W(180, 360, 180, 380), W(180, 300, 180, 120), W(180, 120, 240, 120),
+    W(300, 120, 400, 120), W(460, 120, 560, 120),
+    W(380, 280, 340, 280), W(340, 280, 340, 320), W(340, 380, 340, 400)],
+  probes: [vp(560, 120)]
+});
+const D12D = join(SPLIT, STAGE(240, "U1A"), {
+  comps: [G(220, 120, 90), R_(240, 120, 0, "R1", "1k"), R_(400, 120, 0, "RF", "10k"),
+    V_(300, 320, "VS", "DC 0", "1"), G(300, 400), NET(560, 120, "OUT")],
+  wires: [W(220, 120, 240, 120), W(300, 120, 400, 120), W(460, 120, 560, 120),
+    W(380, 280, 300, 280), W(300, 280, 300, 320), W(300, 380, 300, 400)],
+  probes: [vp(560, 120)]
+});
+const D12E = join(SPLIT, STAGE(240, "U1A"), STAGE(560, "U1B"), {
+  comps: [V_(180, 300, "VS", "DC 0", "1"), G(180, 380),
+    R_(240, 120, 0, "R1", "1k"), R_(400, 120, 0, "RF1", "10k"), R_(340, 320, 90, "RCM1", "990"), G(340, 400),
+    R_(560, 120, 0, "R2", "1k"), R_(720, 120, 0, "RF2", "10k"), R_(660, 320, 90, "RCM2", "990"), G(660, 400),
+    NET(880, 120, "OUT")],
+  wires: [W(180, 360, 180, 380), W(180, 300, 180, 120), W(180, 120, 240, 120),
+    W(300, 120, 400, 120), W(460, 120, 560, 120),
+    W(380, 280, 340, 280), W(340, 280, 340, 320), W(340, 380, 340, 400),
+    W(620, 120, 720, 120), W(780, 120, 880, 120),
+    W(700, 280, 660, 280), W(660, 280, 660, 320), W(660, 380, 660, 400)],
+  probes: [vp(880, 120)]
+});
+
 const DIAGRAMS = {
   "e101-04a": D04A, "e101-04b": D04B,
   "e101-05a": D05A, "e101-05b": D05B, "e101-05c": D05C,
   "e101-06a": D_SERIES, "e101-06b": D06B, "e101-06c": D06C,
   "e101-07a": D07A, "e101-07b": D07B, "e101-07c": D07C, "e101-07d": D07D,
   "e101-08a": D08A, "e101-08b": D08B, "e101-08c": D08C, "e101-08d": D08D,
-  ...Object.fromEntries(PULSE_LABS.map((p) => [`e101-09${p.letter}`, D09(p)]))
+  ...Object.fromEntries(PULSE_LABS.map((p) => [`e101-09${p.letter}`, D09(p)])),
+  "e101-10a": D10_2("7432", "Q"), "e101-10b": D10_2("7402", "QBAR"),
+  "e101-10c": D10_3("7411", "Q"), "e101-10d": D10_3("7410", "QBAR"), "e101-10e": D10E,
+  "e101-11a": D11A, "e101-11b": D11B, "e101-11c": D11C, "e101-11d": D11D,
+  "e101-12a": D12A, "e101-12b": D12B, "e101-12c": D12C, "e101-12d": D12D, "e101-12e": D12E
 };
 
 export const DIAGRAM_CAPTIONS = {
@@ -1957,7 +2787,10 @@ export const LAB_GROUPS = [
   { id: "e101-6", title: "ELEC 101 · Lab 6 — Drawing circuits" },
   { id: "e101-7", title: "ELEC 101 · Lab 7 — DC sweep" },
   { id: "e101-8", title: "ELEC 101 · Lab 8 — AC sweep" },
-  { id: "e101-9", title: "ELEC 101 · Lab 9 — Transient analysis" }
+  { id: "e101-9", title: "ELEC 101 · Lab 9 — Transient analysis" },
+  { id: "e101-10", title: "ELEC 101 · Lab 10 — Logic gates" },
+  { id: "e101-11", title: "ELEC 101 · Lab 11 — Digital circuits" },
+  { id: "e101-12", title: "ELEC 101 · Lab 12 — Transistor and op-amp amplifiers" }
 ];
 
 export const LAB_KINDS = {

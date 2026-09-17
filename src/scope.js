@@ -145,6 +145,7 @@ export function createScope({ host, measureHost, onStatus }) {
   let region = null;      // {i0, i1} sample range measurements are limited to
   let dragging = null;    // {x0, x1} in canvas pixels, while the pointer is down
   let ranges = {};        // user axis ranges, numbers; missing means automatic
+  let digital = false;    // draw each trace in its own 0/1 lane, as PSpice does for logic
 
   const colors = () => {
     const cs = getComputedStyle(canvas);
@@ -230,16 +231,17 @@ export function createScope({ host, measureHost, onStatus }) {
     // volts scale is a flat line. Each unit gets its own pane, stacked the way
     // PSpice's Add Plot to Window stacks them, sharing the x axis.
     const groups = [];
-    const keyOf = (t) => `${t.type === "current" ? "current" : "voltage"}|${unitOf(t)}`;
-    [...traces].sort((a, b) => (a.type === "current") - (b.type === "current")).forEach((t) => {
+    const lanes = digital && !logX() && traces.every((t) => t.type !== "current");
+    const keyOf = (t) => (lanes ? `lane|${t.name}` : `${t.type === "current" ? "current" : "voltage"}|${unitOf(t)}`);
+    (lanes ? traces : [...traces].sort((a, b) => (a.type === "current") - (b.type === "current"))).forEach((t) => {
       const k = keyOf(t);
       let g = groups.find((q) => q.key === k);
-      if (!g) { g = { key: k, unit: unitOf(t), traces: [] }; groups.push(g); }
+      if (!g) { g = { key: k, unit: lanes ? t.name : unitOf(t), traces: [], lane: lanes }; groups.push(g); }
       g.traces.push(t);
     });
     if (!groups.length) groups.push({ key: "none", unit: "", traces: [] });
 
-    const GAP = 16;
+    const GAP = lanes ? 6 : 16;
     const paneH = (plot.h - GAP * (groups.length - 1)) / groups.length;
     const panes = groups.map((g, gi) => {
       let ymin = Infinity, ymax = -Infinity;
@@ -256,8 +258,9 @@ export function createScope({ host, measureHost, onStatus }) {
       if (ymin === ymax) { ymin -= 0.5; ymax += 0.5; }
       const padY = (ymax - ymin) * 0.08;
       ymin -= padY; ymax += padY;
+      if (g.lane) { ymin = -1; ymax = 6; }
       // A user range, like PSpice's User Defined data range, replaces the fit.
-      const lo = gi === 0 ? ranges.yMin : ranges.y2Min;
+      const lo = g.lane ? NaN : gi === 0 ? ranges.yMin : ranges.y2Min;
       const hi = gi === 0 ? ranges.yMax : ranges.y2Max;
       if (isFinite(lo) && isFinite(hi) && hi > lo) { ymin = lo; ymax = hi; }
       const box = { x: plot.x, y: plot.y + gi * (paneH + GAP), w: plot.w, h: paneH };
@@ -322,12 +325,12 @@ export function createScope({ host, measureHost, onStatus }) {
       ctx.strokeStyle = c.grid;
       ctx.fillStyle = c.soft;
       ctx.textAlign = "right"; ctx.textBaseline = "middle";
-      const yTicks = niceTicks(ymin, ymax, panes.length > 1 ? 4 : 5);
+      const yTicks = pn.lane ? [0, 5] : niceTicks(ymin, ymax, panes.length > 1 ? 4 : 5);
       yTicks.forEach((v) => {
         const y = sy(v);
         if (y < box.y - 1 || y > box.y + box.h + 1) return;
         ctx.beginPath(); ctx.moveTo(box.x, y); ctx.lineTo(box.x + box.w, y); ctx.stroke();
-        ctx.fillText(formatEng(v, 3), box.x - 8, y);
+        ctx.fillText(pn.lane ? (v ? "1" : "0") : formatEng(v, 3), box.x - 8, y);
       });
 
       xTicks.forEach((v) => {
@@ -340,7 +343,7 @@ export function createScope({ host, measureHost, onStatus }) {
         }
       });
 
-      if (ymin < 0 && ymax > 0) {
+      if (ymin < 0 && ymax > 0 && !pn.lane) {
         ctx.strokeStyle = c.rule;
         ctx.beginPath(); ctx.moveTo(box.x, sy(0)); ctx.lineTo(box.x + box.w, sy(0)); ctx.stroke();
       }
@@ -349,10 +352,11 @@ export function createScope({ host, measureHost, onStatus }) {
 
       if (panes.length > 1 && pn.unit) {
         ctx.save();
-        ctx.fillStyle = c.soft;
-        ctx.font = '11px "IBM Plex Sans", system-ui, sans-serif';
+        ctx.fillStyle = pn.lane ? c.traces[result.traces.indexOf(pn.traces[0]) % c.traces.length] : c.soft;
+        ctx.font = pn.lane ? '600 11px "IBM Plex Mono", ui-monospace, monospace' : '11px "IBM Plex Sans", system-ui, sans-serif';
         ctx.textAlign = "left"; ctx.textBaseline = "top";
-        ctx.fillText(pn.unit === "A" ? "current (A)" : pn.unit === "V" ? "voltage (V)" : pn.unit, box.x + 6, box.y + 4);
+        ctx.fillText(pn.lane ? pn.unit.replace(/^v\((.*)\)$/i, "$1").toUpperCase()
+          : pn.unit === "A" ? "current (A)" : pn.unit === "V" ? "voltage (V)" : pn.unit, box.x + 6, box.y + 2);
         ctx.restore();
       }
 
@@ -682,6 +686,9 @@ export function createScope({ host, measureHost, onStatus }) {
     setMode(m) { mode = m; draw(); },
     /** Axis ranges as numbers; NaN or missing means automatic. */
     setRanges(r) { ranges = { ...r }; draw(); },
+    /** Logic lanes: one 0/1 strip per trace, in probe order. */
+    setDigital(on) { digital = !!on; },
+    isDigital: () => digital && !!layout?.panes?.[0]?.lane,
     paneCount: () => (layout?.panes?.length || 0),
     getMode: () => mode,
     isComplex: () => !!result && result.kind === "complex",

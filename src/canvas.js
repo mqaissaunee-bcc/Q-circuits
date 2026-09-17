@@ -268,7 +268,14 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
 
   function drawJunctions() {
     const g = el("g", { "aria-hidden": "true" }, svg);
+    // Outputs that may be left unconnected (a flip-flop's Q̄) are not loose ends.
+    const optional = new Set();
+    store.state.comps.forEach((c) => {
+      const opt = PARTS[c.type].optionalPins;
+      if (opt) pinsOf(c).forEach((p, i) => { if (opt.includes(i)) optional.add(`${p.x},${p.y}`); });
+    });
     net.degree.forEach((deg, k) => {
+      if (deg === 1 && optional.has(k)) return;
       const [x, y] = k.split(",").map(Number);
       if (deg >= 3) {
         el("circle", { cx: x, cy: y, r: 3.4, class: "junction" }, g);
@@ -313,7 +320,9 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
           const node = el("text", {
             x: c.x + dx, y: c.y + dy,
             class: t.cls || "part-value",
-            "text-anchor": def.upright ? (t.anchor || "start") : "middle",
+            // Unrotated, text keeps its own alignment; turned, it centres on
+            // its anchor so it cannot swing across the symbol.
+            "text-anchor": def.upright || !((c.rot || 0) % 360) ? (t.anchor || "start") : "middle",
             "data-edit": "value", "data-id": c.id, "data-field": t.field || ""
           }, g);
           node.textContent = t.text;

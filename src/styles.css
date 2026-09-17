@@ -610,3 +610,11 @@ dl.shortcuts kbd {
 .axis-box { margin: var(--sp-2) 0; border: 1px solid var(--rule); border-radius: var(--radius); padding: 0 var(--sp-3); }
 .axis-box summary { padding: var(--sp-2) 0; cursor: pointer; font-size: .85rem; font-weight: 600; }
 .axis-box[open] { padding-bottom: var(--sp-2); }
+
+/* pin names inside digital symbols */
+.pin-name { font-family: var(--mono); font-size: 10px; fill: var(--ink-soft); dominant-baseline: middle; }
+
+/* palette tabs */
+.palette-tabs { display: inline-flex; margin-right: var(--sp-2); border-right: 1px solid var(--rule); padding-right: var(--sp-2); }
+.palette-tabs button { min-height: 44px; font-weight: 600; }
+#partTools button[hidden] { display: none; }

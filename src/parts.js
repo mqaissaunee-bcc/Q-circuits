@@ -7,6 +7,8 @@
  * netlist lines; `models` names any .model cards those lines depend on.
  */
 
+import { gateLines, jkffLines, parseStimulus, stimulusSource, clockSource, RAIL, RAIL_CARD } from "./digital.js";
+
 export const GRID = 20;
 
 const MULT = { t: 1e12, g: 1e9, meg: 1e6, k: 1e3, m: 1e-3, mil: 25.4e-6, u: 1e-6, n: 1e-9, p: 1e-12, f: 1e-15 };
@@ -52,6 +54,55 @@ export const MODEL_CARDS = {
   MPMOS: ".model MPMOS PMOS(VTO=-2.0 KP=0.25 LAMBDA=0.01 RD=2 RS=1)"
 };
 
+/*
+ * The PSpice LM324 macromodel the ELEC 101 Lab 12 handout lists, line for
+ * line, with its two POLY sources rewritten as behavioural sources:
+ *
+ *   EGND 99 0 POLY(2) (3,0) (4,0) 0 .5 .5
+ *   FB 7 99 POLY(5) VB VC VE VLP VLN 0 42.44E6 -40E6 40E6 40E6 -40E6
+ *
+ * POLY needs XSPICE, which this ngspice build lacks, and asking for it exits
+ * the engine fatally. The rewritten lines are the same polynomials.
+ * Pins: 1 in+, 2 in−, 3 V+, 4 V−, 5 out.
+ */
+MODEL_CARDS.LM324 = `.subckt LM324 1 2 3 4 5
+C1 11 12 0.8000E-12
+C2 6 7 0.800E-12
+DC 5 53 DX
+DE 54 5 DX
+DLP 90 91 DX
+DLN 92 90 DX
+DP 4 3 DX
+BEGND 99 0 V = 0.5*V(3) + 0.5*V(4)
+BFB 7 99 I = 42.44E6*I(VB) - 40E6*I(VC) + 40E6*I(VE) + 40E6*I(VLP) - 40E6*I(VLN)
+GA 6 0 11 12 188.5E-6
+GCM 0 6 10 99 3.352E-9
+IEE 10 4 DC 15.14E-6
+HLIM 90 0 VLIM 1K
+Q1 11 2 13 QX
+Q2 12 1 14 QX
+R2 6 9 100.0E3
+RC1 3 11 5.305E3
+RC2 3 12 5.305E3
+RE1 13 10 1.839E3
+RE2 14 10 1.839E3
+REE 10 99 13.21E6
+RO1 8 5 50
+RO2 7 99 25
+RP 3 4 16.81E3
+VB 9 0 DC 0
+VC 3 53 DC 2.600
+VE 54 4 DC 2.600
+VLIM 7 8 DC 0
+VLP 91 0 DC 25
+VLN 0 92 DC 25
+.MODEL DX D(IS=800.0E-18)
+.MODEL QX NPN(IS=800.0E-18 BF=250)
+.ends`;
+
+// The rail every digital input is pulled up to, and $D_HI connects to.
+MODEL_CARDS.DIGRAIL = RAIL_CARD;
+
 const DIODE_MODELS = ["Dgen", "D1N4148", "D1N750", "DLED", "DZ5V1"];
 const NPN_MODELS = ["QNPN", "Q2N2222", "Q2N3904"];
 const PNP_MODELS = ["QPNP", "Q2N3906"];
@@ -87,6 +138,22 @@ const S = {
            "M25 -20H31", "M25 20H31", "M28 17V23",
            "M44 -30H50", "M47 -33V-27", "M44 30H50"],
   PWR: ["M0 0V-14", "M-12 -14H12"],
+  // Gates: inputs at x=0, output at x=80, body between.
+  AND: ["M0 -20H15", "M0 20H15", "M15 -30H35A30 30 0 0 1 35 30H15Z", "M65 0H80"],
+  NAND: ["M0 -20H15", "M0 20H15", "M15 -30H35A30 30 0 0 1 35 30H15Z",
+         "M65 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M73 0H80"],
+  OR: ["M0 -20H22", "M0 20H22", "M12 -30Q27 0 12 30Q45 30 70 0Q45 -30 12 -30Z", "M70 0H80"],
+  NOR: ["M0 -20H22", "M0 20H22", "M12 -30Q27 0 12 30Q42 30 64 0Q42 -30 12 -30Z",
+        "M64 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M72 0H80"],
+  XOR: ["M0 -20H22", "M0 20H22", "M16 -30Q31 0 16 30Q47 30 70 0Q47 -30 16 -30Z",
+        "M8 -30Q23 0 8 30", "M70 0H80"],
+  NOT: ["M0 0H15", "M15 -18L15 18L58 0Z", "M58 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M66 0H80"],
+  JKFF: ["M20 -60H60V60H20Z", "M0 -40H20", "M0 0H12", "M12 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+         "M20 -6L28 0L20 6", "M0 40H20", "M60 -40H80", "M60 40H64", "M64 40a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+         "M72 40H80", "M40 60V64", "M36 68a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M40 72V80"],
+  // Digital sources: PSpice's arrow-shaped box, pin at the tip.
+  DSRC: ["M-80 -10H-14L0 0L-14 10H-80Z"],
+  DHI: ["M-40 -9H-12L0 0L-12 9H-40Z"],
   VPULSE: ["M0 0H19", "M41 0H60", "M19 0 a11 11 0 1 0 22 0 a11 11 0 1 0 -22 0",
            "M23 4H27L28 -4H32L33 4H37", "M16 -12H22", "M19 -15V-9"],
   // Primary on the left (pins at x=0), secondary on the right (x=60);
@@ -115,6 +182,15 @@ const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [
 export function sourceName(c) {
   return /^v/i.test(String(c.label)) ? c.label : `V_${c.label}`;
 }
+
+/** The logic function and symbol for each 7400-series part number. */
+const GATE_FN = {
+  7400: { fn: "nand", shape: "NAND" }, 7402: { fn: "nor", shape: "NOR" },
+  7408: { fn: "and", shape: "AND" }, 7432: { fn: "or", shape: "OR" },
+  7486: { fn: "xor", shape: "XOR" },
+  7410: { fn: "nand", shape: "NAND" }, 7411: { fn: "and", shape: "AND" },
+  7427: { fn: "nor", shape: "NOR" }
+};
 
 function withSourceName(def) {
   return { ...def, netlistName: sourceName };
@@ -197,9 +273,9 @@ export const PARTS = {
     // Three short lines under the core, between the leads, as PSpice shows them.
     summary: () => "",
     texts: (c) => [
-      { x: 30, y: 72, text: `L1 ${c.l1}`, cls: "part-value", field: "l1" },
-      { x: 30, y: 85, text: `L2 ${c.l2}`, cls: "part-value", field: "l2" },
-      { x: 30, y: 98, text: `k ${c.k}`, cls: "part-value", field: "k" }
+      { x: 30, y: 72, text: `L1 ${c.l1}`, cls: "part-value", field: "l1", anchor: "middle" },
+      { x: 30, y: 85, text: `L2 ${c.l2}`, cls: "part-value", field: "l2", anchor: "middle" },
+      { x: 30, y: 98, text: `k ${c.k}`, cls: "part-value", field: "k", anchor: "middle" }
     ],
     netlistName: (c) => `K${c.label}`,
     models: () => []
@@ -351,6 +427,9 @@ export const PARTS = {
     pinNames: ["in−", "in+", "out", "V+", "V−"],
     box: [-4, -42, 84, 42],
     fields: [
+      { k: "model", label: "Model", def: "LM324", options: ["LM324", "Behavioral"],
+        labels: { LM324: "LM324 (PSpice macromodel)", Behavioral: "Behavioral (simple)" },
+        hint: "The macromodel is the one in the Lab 12 handout. Gain, bandwidth and headroom below apply to Behavioral only" },
       { k: "gain", label: "Open-loop gain", def: "100k",
         hint: "An LM324 is about 100 dB, which is 100k" },
       { k: "gbw", label: "Gain-bandwidth (Hz)", def: "1meg",
@@ -359,6 +438,7 @@ export const PARTS = {
         hint: "How far short of each supply pin the output stops" }
     ],
     emit: (c, n) => {
+      if (c.model === "LM324") return [`X${c.label} ${n[1]} ${n[0]} ${n[3]} ${n[4]} ${n[2]} LM324`];
       const at = (node) => (node === 0 ? "0" : `V(${node})`);
       const x = `${c.label}_x`;
       const a0 = parseValue(c.gain);
@@ -374,9 +454,134 @@ export const PARTS = {
         `B${c.label} ${n[2]} 0 V = max(${at(n[4])}+${c.headroom}, min(${at(n[3])}-${c.headroom}, V(${x})))`
       ];
     },
-    summary: () => "LM324",
-    netlistName: (c) => `B${c.label}`,
+    summary: (c) => (c.model === "LM324" ? "LM324" : "LM324 (simple)"),
+    netlistName: (c) => (c.model === "LM324" ? `X${c.label}` : `B${c.label}`),
+    models: (c) => (c.model === "LM324" ? ["LM324"] : [])
+  },
+
+
+  /* ------------------------------------------------------------ digital */
+
+  GATE2: {
+    key: "GATE2", name: "2-input gate", prefix: "U", shape: S.OR,
+    shapeFor: (c) => S[GATE_FN[c.device]?.shape || "AND"],
+    pins: [[0, -20], [0, 20], [80, 0]], pinNames: ["input A", "input B", "output"],
+    box: [-4, -34, 84, 34],
+    digital: true, optionalPins: [2],
+    fields: [{ k: "device", label: "Device", def: "7400", options: ["7400", "7402", "7408", "7432", "7486"],
+               labels: { 7400: "7400 NAND", 7402: "7402 NOR", 7408: "7408 AND", 7432: "7432 OR", 7486: "7486 XOR" },
+               hint: "TTL levels: 0 V is a 0, 5 V is a 1" }],
+    emit: (c, n) => gateLines(`G${c.label}`, GATE_FN[c.device].fn, [n[0], n[1]], n[2]),
+    summary: (c) => c.device,
+    netlistName: (c) => `BG${c.label}`,
+    models: () => ["DIGRAIL"]
+  },
+
+  GATE3: {
+    key: "GATE3", name: "3-input gate", prefix: "U", shape: S.AND,
+    shapeFor: (c) => [...S[GATE_FN[c.device]?.shape || "AND"], "M0 0H" + (GATE_FN[c.device]?.shape === "AND" || GATE_FN[c.device]?.shape === "NAND" ? 15 : 20)],
+    pins: [[0, -20], [0, 0], [0, 20], [80, 0]], pinNames: ["input A", "input B", "input C", "output"],
+    box: [-4, -34, 84, 34],
+    digital: true, optionalPins: [3],
+    fields: [{ k: "device", label: "Device", def: "7410", options: ["7410", "7411", "7427"],
+               labels: { 7410: "7410 NAND", 7411: "7411 AND", 7427: "7427 NOR" },
+               hint: "TTL levels: 0 V is a 0, 5 V is a 1" }],
+    emit: (c, n) => gateLines(`G${c.label}`, GATE_FN[c.device].fn, [n[0], n[1], n[2]], n[3]),
+    summary: (c) => c.device,
+    netlistName: (c) => `BG${c.label}`,
+    models: () => ["DIGRAIL"]
+  },
+
+  INV: {
+    key: "INV", name: "Inverter", prefix: "U", shape: S.NOT,
+    pins: [[0, 0], [80, 0]], pinNames: ["input", "output"],
+    box: [-4, -22, 84, 22],
+    digital: true, optionalPins: [1],
+    fields: [{ k: "device", label: "Device", def: "7404", options: ["7404"], labels: { 7404: "7404 NOT" }, hint: "" }],
+    emit: (c, n) => gateLines(`G${c.label}`, "not", [n[0]], n[1]),
+    summary: () => "7404",
+    netlistName: (c) => `BG${c.label}`,
+    models: () => ["DIGRAIL"]
+  },
+
+  /**
+   * 7473 JK flip-flop: falling-edge output, active-low clear. Its power-up
+   * state comes from the analysis panel, as PSpice's "Initialize all
+   * flip-flops to" does.
+   */
+  JKFF: {
+    key: "JKFF", name: "JK flip-flop", prefix: "U", shape: S.JKFF,
+    pins: [[0, -40], [0, 0], [0, 40], [40, 80], [80, -40], [80, 40]],
+    pinNames: ["J", "CLK", "K", "CLR", "Q", "Q̄"],
+    box: [-4, -64, 84, 84],
+    digital: true, optionalPins: [4, 5],
+    fields: [{ k: "device", label: "Device", def: "7473", options: ["7473"], labels: { 7473: "7473 JK" },
+               hint: "The output changes when CLK falls. CLR low forces Q to 0" }],
+    texts: () => [
+      { x: 26, y: -40, text: "J", cls: "pin-name", anchor: "start" },
+      { x: 30, y: 0, text: "CLK", cls: "pin-name", anchor: "start" },
+      { x: 26, y: 40, text: "K", cls: "pin-name", anchor: "start" },
+      { x: 54, y: -40, text: "Q", cls: "pin-name", anchor: "end" },
+      { x: 54, y: 40, text: "Q̄", cls: "pin-name", anchor: "end" },
+      { x: 40, y: 50, text: "CLR", cls: "pin-name", anchor: "middle" }
+    ],
+    emit: (c, n, ctx) => jkffLines(`F${c.label}`,
+      { j: n[0], clk: n[1], k: n[2], clr: n[3], q: n[4], qb: n[5] }, ctx?.analysis?.ffInit ?? "X"),
+    summary: () => "7473",
+    netlistName: (c) => `BF${c.label}_cn`,
+    models: () => ["DIGRAIL"]
+  },
+
+  /** STIM1: a digital input described by time/value commands. */
+  STIM: withSourceName({
+    key: "STIM", name: "Digital stimulus", prefix: "DSTM", shape: S.DSRC,
+    pins: [[0, 0]], pinNames: ["out"],
+    box: [-84, -14, 4, 14],
+    digital: true,
+    fields: [{ k: "commands", label: "Commands", def: "0s 0; 1m 1; 2m 0",
+               hint: "PSpice's COMMAND1, COMMAND2 … in order: a time and a 0 or 1, separated by semicolons. 0s 0; 1m 1; 2m 0" }],
+    texts: () => [{ x: -74, y: 0, text: "S1 ⎍", cls: "pin-name", anchor: "start" }],
+    emit: (c, n) => {
+      const { points, error } = parseStimulus(c.commands, parseValue);
+      if (error) return [`* ${c.label}: ${error}`, `${sourceName(c)} ${n[0]} 0 DC 0`];
+      return [stimulusSource(sourceName(c), n[0], points)];
+    },
+    summary: () => "",
     models: () => []
+  }),
+
+  /** DigClock: a periodic digital input. */
+  DCLK: withSourceName({
+    key: "DCLK", name: "Digital clock", prefix: "DSTM", shape: S.DSRC,
+    pins: [[0, 0]], pinNames: ["out"],
+    box: [-84, -14, 4, 14],
+    digital: true,
+    fields: [
+      { k: "offtime", label: "OFFTIME", def: "0.5m", hint: "Time at STARTVAL each cycle" },
+      { k: "ontime", label: "ONTIME", def: "0.5m", hint: "Time at OPPVAL each cycle. The period is ONTIME + OFFTIME" },
+      { k: "delay", label: "DELAY", def: "0", hint: "Extra time at STARTVAL before the first cycle" },
+      { k: "startval", label: "STARTVAL", def: "0", options: ["0", "1"], hint: "The level it starts at" },
+      { k: "oppval", label: "OPPVAL", def: "1", options: ["0", "1"], hint: "The other level" }
+    ],
+    texts: () => [{ x: -74, y: 0, text: "CLK ⎍", cls: "pin-name", anchor: "start" }],
+    emit: (c, n) => [clockSource(sourceName(c), n[0], {
+      delay: parseValue(c.delay) || 0, ontime: parseValue(c.ontime), offtime: parseValue(c.offtime),
+      startval: Number(c.startval), oppval: Number(c.oppval)
+    })],
+    summary: (c) => `${c.offtime}/${c.ontime}`,
+    models: () => []
+  }),
+
+  /** $D_HI: ties a digital input to logic 1. */
+  DHI: {
+    key: "DHI", name: "Logic 1 ($D_HI)", prefix: "HI", shape: S.DHI,
+    pins: [[0, 0]], pinNames: ["net"],
+    virtual: true, noLabel: true, digital: true, countsAsPin: true,
+    box: [-44, -12, 4, 12],
+    fields: [],
+    netName: () => RAIL,
+    texts: () => [{ x: -34, y: 0, text: "HI", cls: "pin-name", anchor: "start" }],
+    emit: () => [], models: () => ["DIGRAIL"]
   },
 
   /**
@@ -438,8 +643,19 @@ export const PARTS = {
   }
 };
 
+/** The palette's two tabs. Ground and net aliases belong to both. */
+export const PALETTE_TABS = {
+  analog: ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR",
+    "NPN", "PNP", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM"],
+  digital: ["GATE2", "GATE3", "INV", "JKFF", "STIM", "DCLK", "DHI", "NET", "GND"]
+};
+
 /** Order the palette is presented in. */
-export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR", "NPN", "PNP", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM"];
+export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR", "NPN", "PNP", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM",
+  "GATE2", "GATE3", "INV", "JKFF", "STIM", "DCLK", "DHI"];
+
+/** Parts that make a circuit digital, for the plot's logic lanes. */
+export const isDigital = (c) => !!PARTS[c.type]?.digital;
 
 /* --------------------------------------------------------------- geometry */
 

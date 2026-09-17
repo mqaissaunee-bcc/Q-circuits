@@ -6,7 +6,7 @@
  * the validation messages from ever disagreeing with what is on the sheet.
  */
 
-import { PARTS, PALETTE, pinsOf, netlistNameOf } from "./parts.js";
+import { PARTS, PALETTE, PALETTE_TABS, pinsOf, netlistNameOf, isDigital } from "./parts.js";
 import { buildNodes, nodesFor, validate, formatEng, paramValues, parseValue } from "./netlist.js";
 import { Store, DEFAULT_ANALYSIS, DEFAULT_PLOT } from "./store.js";
 import { createCanvas } from "./canvas.js";
@@ -70,16 +70,44 @@ function confirmReplace(what) {
 /* ------------------------------------------------------------- palette */
 
 const partTools = $("partTools");
-PALETTE.forEach((key) => {
-  const def = PARTS[key];
-  const b = document.createElement("button");
-  b.type = "button";
-  b.dataset.tool = key;
-  b.setAttribute("aria-pressed", "false");
-  b.title = def.name;
-  b.textContent = shortName(def);
-  partTools.appendChild(b);
+const tabRow = document.createElement("span");
+tabRow.className = "seg palette-tabs";
+tabRow.setAttribute("role", "group");
+tabRow.setAttribute("aria-label", "Part set");
+partTools.appendChild(tabRow);
+Object.keys(PALETTE_TABS).forEach((tab) => {
+  const t = document.createElement("button");
+  t.type = "button";
+  t.dataset.tab = tab;
+  t.textContent = tab === "analog" ? "Analog" : "Digital";
+  t.setAttribute("aria-pressed", "false");
+  tabRow.appendChild(t);
+  PALETTE_TABS[tab].forEach((key) => {
+    const def = PARTS[key];
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.tool = key;
+    b.dataset.tabPart = tab;
+    b.setAttribute("aria-pressed", "false");
+    b.title = def.name;
+    b.textContent = shortName(def);
+    partTools.appendChild(b);
+  });
 });
+
+/** Show one part set. Keyboard shortcuts reach every part either way. */
+function setPaletteTab(tab) {
+  partTools.querySelectorAll("[data-tab]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.tab === tab ? "true" : "false"));
+  partTools.querySelectorAll("[data-tab-part]").forEach((b) => { b.hidden = b.dataset.tabPart !== tab; });
+}
+tabRow.addEventListener("click", (evt) => {
+  const b = evt.target.closest("[data-tab]");
+  if (!b) return;
+  setPaletteTab(b.dataset.tab);
+  say(`${b.textContent} parts shown.`);
+});
+setPaletteTab("analog");
+void PALETTE;
 
 function shortName(def) {
   const map = {
@@ -90,14 +118,16 @@ function shortName(def) {
     "N-channel MOSFET": "NMOS", "P-channel MOSFET": "PMOS",
     "Op-amp": "Op-amp", "LM324 op-amp": "LM324",
     "Net alias": "Net alias", "Power symbol": "Power", Parameter: "Param",
-    "Pulse source": "Pulse", Transformer: "Xfmr"
+    "Pulse source": "Pulse", Transformer: "Xfmr",
+    "2-input gate": "Gate", "3-input gate": "Gate3", Inverter: "NOT", "JK flip-flop": "7473",
+    "Digital stimulus": "STIM1", "Digital clock": "DigClock", "Logic 1 ($D_HI)": "$D_HI"
   };
   return map[def.name] || def.name;
 }
 
 function setTool(tool) {
   canvas.setTool(tool);
-  document.querySelectorAll("#modeTools button, #viewTools button, #partTools button").forEach((b) => {
+  document.querySelectorAll("#modeTools button[data-tool], #viewTools button[data-tool], #partTools button[data-tool]").forEach((b) => {
     b.setAttribute("aria-pressed", b.dataset.tool === tool ? "true" : "false");
   });
 }
@@ -424,6 +454,7 @@ function syncAnalysisInputs() {
   $("fieldsDC").hidden = a.type !== "dc";
   $("fieldsTran").hidden = a.type !== "tran";
   $("fieldsAC").hidden = a.type !== "ac";
+  $("ffInit").value = a.ffInit || "X";
   $("paramOn").checked = !!a.paramOn;
   $("paramMode").value = a.paramMode || "lin";
   $("fieldsParam").hidden = !a.paramOn;
@@ -431,6 +462,9 @@ function syncAnalysisInputs() {
   $("paramListWrap").hidden = a.paramMode !== "list";
 }
 
+$("ffInit").addEventListener("change", () => {
+  store.edit((s) => { s.analysis.ffInit = $("ffInit").value; }, "analysis");
+});
 $("paramOn").addEventListener("change", () => {
   store.edit((s) => { s.analysis.paramOn = $("paramOn").checked; }, "analysis");
   syncAnalysisInputs();
@@ -488,6 +522,7 @@ async function run() {
 
 function applyResult(result) {
   const filtered = probedTraces(result, store.state);
+  scope.setDigital(store.state.comps.some(isDigital) && !filtered.kind?.startsWith?.("complex"));
   scope.setResult(filtered);
   $("btnCsv").disabled = false;
   $("btnPngPlot").disabled = false;
@@ -627,7 +662,9 @@ function applyRanges() {
   const r = {};
   Object.keys(PLOT_INPUTS).forEach((k) => { r[k] = String(p[k] ?? "").trim() ? parseValue(p[k]) : NaN; });
   scope.setRanges(r);
-  $("plotY2Row").hidden = scope.paneCount() < 2;
+  const lanes = scope.isDigital() && scope.paneCount() > 0;
+  $("plotY2Row").hidden = lanes || scope.paneCount() < 2;
+  $("plotYLabel").closest(".field-grid-2").hidden = lanes;
   $("plotYLabel").textContent = scope.paneCount() > 1 ? "Top plot Y from" : "Y from";
 }
 
@@ -769,6 +806,7 @@ function setLab(lab) {
   store.currentLabId = lab ? lab.id : "";
   $("btnDiagram").hidden = !lab;
   diagram.setLab(lab);
+  if (lab) setPaletteTab(/^e101-1[01]/.test(lab.id) ? "digital" : "analog");
   $("checkResults").replaceChildren();
   if (!lab) { clearLabPanel(); return; }
   renderLabPanel(lab);

@@ -26,7 +26,9 @@ export const DEFAULT_ANALYSIS = {
   acPts: "25", acStart: "10", acStop: "1meg",
   // Parametric sweep: a series of runs with one .param changed each time.
   paramOn: false, paramName: "", paramMode: "lin",
-  paramStart: "", paramStop: "", paramStep: "", paramList: ""
+  paramStart: "", paramStop: "", paramStep: "", paramList: "",
+  // PSpice's "Initialize all flip-flops to": X leaves it to the solver.
+  ffInit: "X"
 };
 
 /**

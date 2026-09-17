@@ -9,6 +9,7 @@
  */
 
 import { PARTS, MODEL_CARDS, pinsOf, boxOf, netlistNameOf, isVirtual, netNameOf } from "./parts.js";
+import { parseStimulus } from "./digital.js";
 
 /* ----------------------------------------------------------- connectivity */
 
@@ -107,10 +108,14 @@ export function buildNodes(comps, wires) {
 
   const pinCount = new Map();     // node -> how many part pins touch it
   comps.forEach((c) => {
-    if (isVirtual(c)) return;
+    const def = PARTS[c.type];
+    if (isVirtual(c) && !def.countsAsPin) return;
     pinsOf(c).forEach((_, i) => {
       const nd = pinNode.get(`${c.id}:${i}`);
-      pinCount.set(nd, (pinCount.get(nd) || 0) + 1);
+      // An output nobody listens to is normal (a flip-flop's Q̄), so it
+      // counts as connected on its own.
+      const weight = def.optionalPins?.includes(i) ? 2 : 1;
+      pinCount.set(nd, (pinCount.get(nd) || 0) + weight);
     });
   });
 
@@ -179,7 +184,7 @@ export function buildNetlist(comps, wires, analysis, title = "Circuit from the s
   const net = buildNodes(comps, wires);
   const lines = [`* ${title}`];
   const models = new Set();
-  const ctx = { overrides: extra.overrides || {} };
+  const ctx = { overrides: extra.overrides || {}, analysis };
 
   // .param cards first: ngspice resolves {NAME} as it reads each line.
   const ordered = [...comps].sort((a, b) => (a.type === "PARAM" ? 0 : 1) - (b.type === "PARAM" ? 0 : 1));
@@ -216,7 +221,9 @@ export function validate(comps, wires, net, analysis) {
   }
   if (!parts.length) {
     msgs.push({ level: "warn", text: "There are no circuit parts on the sheet yet, only labels and symbols." });
-  } else if (!comps.some((c) => c.type === "GND")) {
+  } else if (!comps.some((c) => c.type === "GND") && !parts.every((c) => PARTS[c.type].digital)) {
+    // Digital parts carry their own ground, as PSpice's do; anything
+    // analog on the sheet still needs one.
     msgs.push({ level: "error", text: "No ground. SPICE needs one node numbered 0 as its voltage reference — place a ground symbol." });
   }
 
@@ -251,6 +258,22 @@ export function validate(comps, wires, net, analysis) {
       }
     });
   });
+
+  // Digital sources: a mistyped command table or clock silently becomes 0 V.
+  comps.forEach((c) => {
+    if (c.type === "STIM") {
+      const { error } = parseStimulus(c.commands, parseValue);
+      if (error) msgs.push({ level: "error", text: `${c.label}: ${error}.` });
+    }
+    if (c.type === "DCLK") {
+      ["ontime", "offtime"].forEach((k) => {
+        if (!(parseValue(c[k]) > 0)) msgs.push({ level: "error", text: `${c.label}: ${k.toUpperCase()} has to be a time above zero.` });
+      });
+    }
+  });
+  if (analysis.type === "tran" && comps.some((c) => c.type === "JKFF") && (analysis.ffInit ?? "X") === "X") {
+    msgs.push({ level: "warn", text: "The flip-flops start in an unknown state. Set Initialize flip-flops to 0 in the Analysis panel, as the handout does." });
+  }
 
   // A part with both ends on one node does nothing: it has been wired out.
   parts.forEach((c) => {
