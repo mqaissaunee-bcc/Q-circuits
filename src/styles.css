@@ -263,8 +263,6 @@ svg.sheet:focus-visible { outline-offset: -3px; }
 .part-label { font-family: var(--mono); font-size: 12px; fill: var(--ink); }
 .part-value { font-family: var(--mono); font-size: 11px; fill: var(--ink-soft); }
 .node-tag { font-family: var(--mono); font-size: 11px; fill: var(--accent); }
-.net-label { font-family: var(--mono); font-size: 12px; font-weight: 600; fill: var(--accent); text-anchor: middle; }
-.node-volt { font-family: var(--mono); font-size: 11px; fill: var(--ok); font-weight: 600; }
 .note {
   font-family: var(--sans);
   font-size: 12.5px;
@@ -276,7 +274,7 @@ svg.sheet:focus-visible { outline-offset: -3px; }
 .preview { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 4 4; fill: none; }
 .caret path { stroke: var(--accent); stroke-width: 1.5; fill: none; }
 .caret circle { fill: var(--accent); }
-.ghost { opacity: .4; }
+svg .ghost { opacity: .4; }   /* the placement preview, not button.ghost */
 .probe { fill: none; stroke: var(--probe); stroke-width: 2.5; }
 .probe-ghost { opacity: .5; }
 .probe-label { font-family: var(--mono); font-size: 10px; fill: var(--probe); }
@@ -533,3 +531,34 @@ dl.shortcuts kbd {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* ---------------------------------------------------- net names, params */
+.net-name { font-family: var(--mono); font-size: 12px; font-weight: 600; fill: var(--accent); cursor: text; }
+.param-head { font-family: var(--mono); font-size: 11px; font-weight: 600; fill: var(--ink); }
+.part.is-virtual .part-path { stroke: var(--accent); }
+.probe-sign { font-family: var(--mono); font-size: 10px; font-weight: 700; fill: var(--panel); pointer-events: none; }
+
+/* operating-point voltages, PSpice's V button */
+.bias-tag { fill: var(--probe-soft); stroke: var(--probe); stroke-width: .8; }
+.bias-text { font-family: var(--mono); font-size: 10.5px; font-weight: 600; fill: var(--probe); }
+#btnBias[aria-pressed="true"] { background: var(--probe-soft); color: var(--probe); border-color: var(--probe); }
+
+/* parametric sweep block in the analysis panel */
+.param-box { border-top: 1px solid var(--rule); margin-top: var(--sp-3); padding-top: var(--sp-2); }
+
+/* lab panel */
+.lab-kind {
+  display: inline-block; margin: 0 0 var(--sp-2); padding: 1px var(--sp-2);
+  font-size: .72rem; font-weight: 600; letter-spacing: .03em; text-transform: uppercase;
+  border-radius: var(--radius); background: var(--panel-2); color: var(--ink-soft);
+}
+.lab-kind[data-kind="fix"] { background: var(--danger-soft); color: var(--danger); }
+.lab-kind[data-kind="simulate"] { background: var(--accent-soft); color: var(--accent); }
+.lab-kind[data-kind="draw"] { background: var(--ok-soft); color: var(--ok); }
+.lab-questions { border-top: 1px solid var(--rule); margin-top: var(--sp-3); padding-top: var(--sp-2); }
+.lab-questions h3 { font-size: .85rem; margin: 0 0 var(--sp-1); }
+.check-list li.is-answer { font-style: normal; }
+.check-list li.is-answer::before { content: ""; }
+
+/* The palette is the widest group; slimmer buttons keep the toolbar to two rows. */
+#partTools button { padding-inline: .6rem; }

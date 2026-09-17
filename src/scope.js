@@ -33,6 +33,19 @@ function niceTicks(min, max, target = 6) {
   return out;
 }
 
+/** 2×, 3× … 9× each decade, for the faint minor grid on a log axis. */
+function minorLogTicks(min, max) {
+  const out = [];
+  for (let d = Math.floor(Math.log10(min)); d <= Math.ceil(Math.log10(max)); d++) {
+    const base = Math.pow(10, d);
+    for (let m = 2; m <= 9; m++) {
+      const v = base * m;
+      if (v >= min && v <= max) out.push(v);
+    }
+  }
+  return out;
+}
+
 function decadeTicks(min, max) {
   const out = [];
   for (let d = Math.floor(Math.log10(min)); d <= Math.ceil(Math.log10(max)); d++) {
@@ -204,92 +217,155 @@ export function createScope({ host, measureHost, onStatus }) {
     let xmin = xs[0], xmax = xs[xs.length - 1];
     if (useLog) { xmin = Math.max(xmin, 1e-12); xmax = Math.max(xmax, xmin * 10); }
 
-    let ymin = Infinity, ymax = -Infinity;
-    traces.forEach((t) => {
-      const s = seriesOf(t);
-      for (let i = 0; i < s.length; i++) {
-        const v = s[i];
-        if (!isFinite(v)) continue;
-        if (v < ymin) ymin = v;
-        if (v > ymax) ymax = v;
-      }
-    });
-    if (!isFinite(ymin) || !isFinite(ymax)) { ymin = -1; ymax = 1; }
-    if (ymin === ymax) { ymin -= 0.5; ymax += 0.5; }
-    const padY = (ymax - ymin) * 0.08;
-    ymin -= padY; ymax += padY;
-
     const sx = (v) => useLog
       ? plot.x + ((Math.log10(Math.max(v, xmin)) - Math.log10(xmin)) / (Math.log10(xmax) - Math.log10(xmin))) * plot.w
       : plot.x + ((v - xmin) / (xmax - xmin || 1)) * plot.w;
-    const sy = (v) => plot.y + plot.h - ((v - ymin) / (ymax - ymin)) * plot.h;
 
-    layout = { plot, sx, sy, xs, useLog };
+    // Volts and amps never share an axis: a milliamp trace drawn against a
+    // volts scale is a flat line. Each unit gets its own pane, stacked the way
+    // PSpice's Add Plot to Window stacks them, sharing the x axis.
+    const groups = [];
+    const keyOf = (t) => `${t.type === "current" ? "current" : "voltage"}|${unitOf(t)}`;
+    [...traces].sort((a, b) => (a.type === "current") - (b.type === "current")).forEach((t) => {
+      const k = keyOf(t);
+      let g = groups.find((q) => q.key === k);
+      if (!g) { g = { key: k, unit: unitOf(t), traces: [] }; groups.push(g); }
+      g.traces.push(t);
+    });
+    if (!groups.length) groups.push({ key: "none", unit: "", traces: [] });
+
+    const GAP = 16;
+    const paneH = (plot.h - GAP * (groups.length - 1)) / groups.length;
+    const panes = groups.map((g, gi) => {
+      let ymin = Infinity, ymax = -Infinity;
+      g.traces.forEach((t) => {
+        const s = seriesOf(t);
+        for (let i = 0; i < s.length; i++) {
+          const v = s[i];
+          if (!isFinite(v)) continue;
+          if (v < ymin) ymin = v;
+          if (v > ymax) ymax = v;
+        }
+      });
+      if (!isFinite(ymin) || !isFinite(ymax)) { ymin = -1; ymax = 1; }
+      if (ymin === ymax) { ymin -= 0.5; ymax += 0.5; }
+      const padY = (ymax - ymin) * 0.08;
+      ymin -= padY; ymax += padY;
+      const box = { x: plot.x, y: plot.y + gi * (paneH + GAP), w: plot.w, h: paneH };
+      const sy = (v) => box.y + box.h - ((v - ymin) / (ymax - ymin)) * box.h;
+      return { ...g, box, ymin, ymax, sy };
+    });
+    const paneOf = new Map();
+    panes.forEach((pn) => pn.traces.forEach((t) => paneOf.set(t, pn)));
+
+    layout = { plot, sx, sy: panes[0].sy, xs, useLog, panes, paneOf };
+
+    ctx.fillStyle = c.bg;
+    panes.forEach((pn) => ctx.fillRect(pn.box.x, pn.box.y, pn.box.w, pn.box.h));
+    if (panes.length > 1) {
+      // the gaps between panes belong to the page, not the plot
+      ctx.clearRect(plot.x, plot.y, plot.w, plot.h);
+      ctx.fillStyle = c.bg;
+      panes.forEach((pn) => ctx.fillRect(pn.box.x, pn.box.y, pn.box.w, pn.box.h));
+    }
 
     // measurement window, drawn under the grid
     const band = dragging
       ? { a: dragging.x0, b: dragging.x1 }
       : region ? { a: sx(xs[region.i0]), b: sx(xs[region.i1]) } : null;
     if (band) {
-      ctx.save();
-      ctx.globalAlpha = 0.55;
-      ctx.fillStyle = c.band;
-      ctx.fillRect(Math.min(band.a, band.b), plot.y, Math.abs(band.b - band.a), plot.h);
-      ctx.restore();
-      ctx.strokeStyle = c.accent;
-      ctx.setLineDash([3, 3]);
-      [band.a, band.b].forEach((x) => {
-        ctx.beginPath(); ctx.moveTo(x, plot.y); ctx.lineTo(x, plot.y + plot.h); ctx.stroke();
+      panes.forEach((pn) => {
+        ctx.save();
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = c.band;
+        ctx.fillRect(Math.min(band.a, band.b), pn.box.y, Math.abs(band.b - band.a), pn.box.h);
+        ctx.restore();
+        ctx.strokeStyle = c.accent;
+        ctx.setLineDash([3, 3]);
+        [band.a, band.b].forEach((x) => {
+          ctx.beginPath(); ctx.moveTo(x, pn.box.y); ctx.lineTo(x, pn.box.y + pn.box.h); ctx.stroke();
+        });
+        ctx.setLineDash([]);
+      });
+    }
+
+    const xTicks = useLog ? decadeTicks(xmin, xmax) : niceTicks(xmin, xmax, 6);
+    const xMinor = useLog ? minorLogTicks(xmin, xmax) : [];
+
+    panes.forEach((pn, pi) => {
+      const { box, sy, ymin, ymax } = pn;
+      ctx.lineWidth = 1;
+      ctx.font = '11px "IBM Plex Mono", ui-monospace, monospace';
+
+      // minor log gridlines first, fainter, so decades still read at a glance
+      if (xMinor.length) {
+        ctx.save();
+        ctx.strokeStyle = c.grid;
+        ctx.globalAlpha = 0.45;
+        xMinor.forEach((v) => {
+          const x = sx(v);
+          if (x < box.x || x > box.x + box.w) return;
+          ctx.beginPath(); ctx.moveTo(x, box.y); ctx.lineTo(x, box.y + box.h); ctx.stroke();
+        });
+        ctx.restore();
+      }
+
+      ctx.strokeStyle = c.grid;
+      ctx.fillStyle = c.soft;
+      ctx.textAlign = "right"; ctx.textBaseline = "middle";
+      const yTicks = niceTicks(ymin, ymax, panes.length > 1 ? 4 : 5);
+      yTicks.forEach((v) => {
+        const y = sy(v);
+        if (y < box.y - 1 || y > box.y + box.h + 1) return;
+        ctx.beginPath(); ctx.moveTo(box.x, y); ctx.lineTo(box.x + box.w, y); ctx.stroke();
+        ctx.fillText(formatEng(v, 3), box.x - 8, y);
+      });
+
+      xTicks.forEach((v) => {
+        const x = sx(v);
+        if (x < box.x - 1 || x > box.x + box.w + 1) return;
+        ctx.beginPath(); ctx.moveTo(x, box.y); ctx.lineTo(x, box.y + box.h); ctx.stroke();
+        if (pi === panes.length - 1) {
+          ctx.textAlign = "center"; ctx.textBaseline = "top";
+          ctx.fillText(formatEng(v, 3), x, box.y + box.h + 7);
+        }
+      });
+
+      if (ymin < 0 && ymax > 0) {
+        ctx.strokeStyle = c.rule;
+        ctx.beginPath(); ctx.moveTo(box.x, sy(0)); ctx.lineTo(box.x + box.w, sy(0)); ctx.stroke();
+      }
+      ctx.strokeStyle = c.rule;
+      ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w, box.h);
+
+      if (panes.length > 1 && pn.unit) {
+        ctx.save();
+        ctx.fillStyle = c.soft;
+        ctx.font = '11px "IBM Plex Sans", system-ui, sans-serif';
+        ctx.textAlign = "left"; ctx.textBaseline = "top";
+        ctx.fillText(pn.unit === "A" ? "current (A)" : pn.unit === "V" ? "voltage (V)" : pn.unit, box.x + 6, box.y + 4);
+        ctx.restore();
+      }
+
+      ctx.lineWidth = 1.8;
+      ctx.lineJoin = "round";
+      pn.traces.forEach((t) => {
+        const s = seriesOf(t);
+        const idx = result.traces.indexOf(t);
+        ctx.strokeStyle = c.traces[idx % c.traces.length];
+        ctx.setLineDash(TRACE_DASHES[idx % TRACE_DASHES.length]);
+        ctx.beginPath();
+        let started = false;
+        for (let k = 0; k < s.length && k < xs.length; k++) {
+          const v = s[k];
+          if (!isFinite(v)) { started = false; continue; }
+          const px = sx(xs[k]), py = sy(v);
+          if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
       });
       ctx.setLineDash([]);
-    }
-
-    ctx.strokeStyle = c.grid;
-    ctx.lineWidth = 1;
-    ctx.fillStyle = c.soft;
-    ctx.font = '11px "IBM Plex Mono", ui-monospace, monospace';
-
-    ctx.textAlign = "right"; ctx.textBaseline = "middle";
-    niceTicks(ymin, ymax, 5).forEach((v) => {
-      const y = sy(v);
-      if (y < plot.y - 1 || y > plot.y + plot.h + 1) return;
-      ctx.beginPath(); ctx.moveTo(plot.x, y); ctx.lineTo(plot.x + plot.w, y); ctx.stroke();
-      ctx.fillText(formatEng(v, 3), plot.x - 8, y);
     });
-
-    ctx.textAlign = "center"; ctx.textBaseline = "top";
-    (useLog ? decadeTicks(xmin, xmax) : niceTicks(xmin, xmax, 6)).forEach((v) => {
-      const x = sx(v);
-      if (x < plot.x - 1 || x > plot.x + plot.w + 1) return;
-      ctx.beginPath(); ctx.moveTo(x, plot.y); ctx.lineTo(x, plot.y + plot.h); ctx.stroke();
-      ctx.fillText(formatEng(v, 3), x, plot.y + plot.h + 7);
-    });
-
-    if (ymin < 0 && ymax > 0) {
-      ctx.strokeStyle = c.rule;
-      ctx.beginPath(); ctx.moveTo(plot.x, sy(0)); ctx.lineTo(plot.x + plot.w, sy(0)); ctx.stroke();
-    }
-    ctx.strokeStyle = c.rule;
-    ctx.strokeRect(plot.x + 0.5, plot.y + 0.5, plot.w, plot.h);
-
-    ctx.lineWidth = 1.8;
-    ctx.lineJoin = "round";
-    traces.forEach((t) => {
-      const s = seriesOf(t);
-      const idx = result.traces.indexOf(t);
-      ctx.strokeStyle = c.traces[idx % c.traces.length];
-      ctx.setLineDash(TRACE_DASHES[idx % TRACE_DASHES.length]);
-      ctx.beginPath();
-      let started = false;
-      for (let k = 0; k < s.length && k < xs.length; k++) {
-        const v = s[k];
-        if (!isFinite(v)) { started = false; continue; }
-        const px = sx(xs[k]), py = sy(v);
-        if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
-      }
-      ctx.stroke();
-    });
-    ctx.setLineDash([]);
 
     ctx.fillStyle = c.soft;
     ctx.font = '11px "IBM Plex Sans", system-ui, sans-serif';
@@ -331,13 +407,16 @@ export function createScope({ host, measureHost, onStatus }) {
     ctx.strokeStyle = c.soft;
     ctx.setLineDash([4, 4]);
     ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(x, layout.plot.y); ctx.lineTo(x, layout.plot.y + layout.plot.h); ctx.stroke();
+    layout.panes.forEach((pn) => {
+      ctx.beginPath(); ctx.moveTo(x, pn.box.y); ctx.lineTo(x, pn.box.y + pn.box.h); ctx.stroke();
+    });
     ctx.setLineDash([]);
     visibleTraces().forEach((t) => {
       const v = seriesOf(t)[i];
-      if (!isFinite(v)) return;
+      const pn = layout.paneOf.get(t);
+      if (!isFinite(v) || !pn) return;
       ctx.fillStyle = c.traces[result.traces.indexOf(t) % c.traces.length];
-      ctx.beginPath(); ctx.arc(x, layout.sy(v), 3.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x, pn.sy(v), 3.5, 0, Math.PI * 2); ctx.fill();
     });
     ctx.restore();
   }

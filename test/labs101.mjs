@@ -1,0 +1,480 @@
+/**
+ * ELEC 101 lab checks, end to end.
+ *
+ * For every exercise: the starting sheet must fail, and a correct solution,
+ * built the way a student would leave it, must pass every check. That pins
+ * down the supplied circuits, the checks and the expected answers together.
+ *
+ * Run with: node test/labs101.mjs   (after npm run build)
+ */
+
+import { chromium } from "playwright";
+import { createServer } from "http";
+import { readFileSync, existsSync, statSync } from "fs";
+import { extname, join, normalize } from "path";
+
+const ROOT = new URL("../dist/", import.meta.url).pathname;
+const PORT = 5212;
+const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
+const server = createServer((req, res) => {
+  const rel = decodeURIComponent(req.url.split("?")[0]);
+  const file = join(ROOT, normalize(rel === "/" ? "/index.html" : rel));
+  if (!file.startsWith(ROOT) || !existsSync(file) || statSync(file).isDirectory()) { res.writeHead(404); return res.end(); }
+  res.writeHead(200, { "Content-Type": MIME[extname(file)] || "application/octet-stream" });
+  res.end(readFileSync(file));
+});
+await new Promise((r) => server.listen(PORT, r));
+
+let pass = 0, fail = 0;
+function check(name, ok, detail = "") {
+  console.log(`${ok ? "  PASS" : "  FAIL"}  ${name}${detail ? `  — ${detail}` : ""}`);
+  ok ? pass++ : fail++;
+}
+
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+const errors = [];
+page.on("pageerror", (e) => errors.push(e.message));
+page.on("dialog", (d) => d.accept());
+await page.goto(`http://localhost:${PORT}/`);
+await page.waitForFunction(() => window.__spiceLab?.ready === true, null, { timeout: 20000 });
+
+/* In-page helpers, installed once. */
+await page.evaluate(() => {
+  const L = window.__spiceLab;
+  const S = L.store;
+  window.T = {
+    open(id) {
+      L.freshLabs();
+      const sel = document.getElementById("labSelect");
+      sel.value = id;
+      sel.dispatchEvent(new Event("change"));
+    },
+    comp(label) { return S.state.comps.find((c) => c.label === label); },
+    add(type, x, y, rot, fields) {
+      let c;
+      S.edit(() => { c = S.addComp(type, x, y, type === "GND" ? "GND" : "X"); Object.assign(c, { rot }, fields); }, "t");
+      return c;
+    },
+    wire(...segs) { S.edit(() => segs.forEach(([a, b, c, d]) => S.addWire(a, b, c, d)), "t"); },
+    unwire(a, b, c, d) {
+      S.edit((s) => { s.wires = s.wires.filter((w) => !(w.x1 === a && w.y1 === b && w.x2 === c && w.y2 === d)); }, "t");
+    },
+    remove(label) { S.edit((s) => { s.comps = s.comps.filter((c) => c.label !== label); }, "t"); },
+    set(fn) { S.edit((s) => fn(s), "t"); },
+    vprobe(x, y) { S.toggleProbe("v", `${x},${y}`, { x, y }); },
+    async check(id) {
+      const out = await L.labs.runChecks(L.labs.labById(id), S);
+      return { ok: out.ok, error: out.error, failed: out.results.filter((r) => !r.pass).map((r) => `${r.label}: ${r.detail}`), n: out.results.length };
+    },
+    /** The series circuit of 6A and 7A. */
+    series() {
+      this.add("V", 160, 160, 90, { label: "VS", value: "DC 12", ac: "" });
+      this.add("R", 220, 100, 0, { label: "R1", value: "100" });
+      this.add("R", 340, 160, 90, { label: "R2", value: "300" });
+      this.add("GND", 250, 300, 0, {});
+      this.add("NET", 160, 100, 0, { label: "NA", name: "A" });
+      this.add("NET", 340, 100, 0, { label: "NB", name: "B" });
+      this.wire([160, 160, 160, 100], [160, 100, 220, 100], [280, 100, 340, 100], [340, 100, 340, 160],
+                [340, 220, 340, 280], [340, 280, 160, 280], [160, 220, 160, 280], [250, 280, 250, 300]);
+    }
+  };
+});
+
+async function lab(id, solve, extra) {
+  console.log(`\n— ${id} —`);
+  await page.evaluate((i) => window.T.open(i), id);
+  const start = await page.evaluate((i) => window.T.check(i), id);
+  check(`${id}: the starting sheet does not pass`, !start.ok, `${start.failed.length} of ${start.n} checks fail`);
+  if (extra?.start) await extra.start(start);
+  await page.evaluate(solve);
+  const done = await page.evaluate((i) => window.T.check(i), id);
+  check(`${id}: a correct solution passes every check`, done.ok, done.error ? `engine: ${done.error.split("\n")[0]}` : done.failed.join(" | "));
+  return done;
+}
+
+/* ---------------------------------------------------------------- 4A */
+
+await lab("e101-04a", async () => {
+  const T = window.T;
+  T.remove("V2");
+  T.set(() => { T.comp("V1").value = "DC 12"; });
+  T.unwire(260, 140, 320, 140);
+  T.wire([460, 40, 380, 40], [380, 40, 380, 140]);
+  T.add("GND", 300, 360, 0, {});
+  T.wire([300, 340, 300, 360]);
+  T.set((s) => { s.title = "LAB 04A"; s.answers = { ve: "5.64" }; });
+}, {
+  start: async (st) => {
+    const text = st.failed.join(" ");
+    check("4A start: the stacked source is caught", /only source/.test(text));
+    check("4A start: the shorted R1 is caught", /R1 is back in series/.test(text));
+    check("4A start: the open collector is caught", /collector is joined/.test(text));
+    const warns = await page.evaluate(() => [...document.querySelectorAll("#checks li")].map((l) => l.textContent).join(" | "));
+    check("4A start: the validator names the short", /R1 has both ends on the same node/.test(warns), warns.slice(0, 160));
+    check("4A start: the validator names the stacked parts", /V1 and V2 are drawn on top of each other/.test(warns));
+    check("4A start: the validator names the missing value", /V1 has no value/.test(warns));
+    check("4A start: the validator names the missing ground", /No ground/.test(warns));
+  }
+});
+
+/* ---------------------------------------------------------------- 4B */
+
+await lab("e101-04b", () => {
+  const T = window.T;
+  T.set((s) => {
+    s.comps = s.comps.filter((c) => c.type === "GND" ? false : true);
+    s.wires = [];
+    T.comp("R1").value = "1k";
+    Object.assign(T.comp("V1"), { x: 120, y: 160 });
+    Object.assign(T.comp("R3"), { x: 460, y: 80 });
+    Object.assign(T.comp("R4"), { x: 680, y: 160 });
+  });
+  T.add("GND", 400, 300, 0, {});
+  T.wire([120, 160, 120, 80], [120, 80, 180, 80], [240, 80, 400, 80], [400, 80, 400, 160],
+         [400, 80, 460, 80], [520, 80, 680, 80], [680, 80, 680, 160],
+         [400, 220, 400, 280], [680, 220, 680, 280], [120, 280, 680, 280], [120, 220, 120, 280], [400, 280, 400, 300]);
+  T.set((s) => { s.title = "Lab 04B"; s.answers = { vr2: "4.8" }; });
+}, {
+  start: async (st) => {
+    const text = st.failed.join(" ");
+    check("4B start: the space in R1 is caught", /with a space/.test(text), text.slice(0, 120));
+    check("4B start: the alignment is caught", /centred at the same height/.test(text));
+    const warns = await page.evaluate(() => document.getElementById("checks").textContent);
+    check("4B start: the validator explains the space", /Take out the space/.test(warns));
+  }
+});
+
+// Moving V1 with the keyboard keeps its wiring and fixes the alignment check.
+await page.evaluate(() => window.T.open("e101-04b"));
+const moved = await page.evaluate(async () => {
+  const S = window.__spiceLab.store;
+  S.selection = new Set([window.T.comp("V1").id]);
+  S.moveSelection(0, 20); S.moveSelection(0, 20); S.moveSelection(0, 20);
+  const out = await window.T.check("e101-04b");
+  return out.failed.join(" | ");
+});
+check("4B: three ↓ presses line V1 up with R2 and R4", !/centred at the same height/.test(moved));
+check("4B: moving V1 keeps its wiring", !/broke|should connect V1/.test(moved), moved.slice(0, 160));
+
+/* ---------------------------------------------------------------- 5A */
+
+const ref5a = await page.evaluate(async () => {
+  window.T.open("e101-05a");
+  const L = window.__spiceLab;
+  const r = await L.simulate(L.store.state, null, { ...L.store.state.analysis, type: "ac", acPts: "50", acStart: "1", acStop: "1meg" });
+  const t = r.traces.find((k) => k.name === "v(out)");
+  return L.labs.corners(t, r.sweep.values);
+});
+check("5A reference: mid-band gain is 19.1 dB", Math.abs(ref5a.peak - 19.08) < 0.1, ref5a.peak.toFixed(3));
+check("5A reference: lower corner near the 66.7 Hz RC corner", ref5a.lo > 55 && ref5a.lo < 80, ref5a.lo.toFixed(1));
+check("5A reference: upper corner near the 17.9 kHz RC corner", ref5a.hi > 14e3 && ref5a.hi < 19e3, ref5a.hi.toFixed(0));
+
+const s5a = await lab("e101-05a", `(() => {
+  const T = window.T;
+  T.set((s) => {
+    s.title = "LAB 05A";
+    Object.assign(s.analysis, { type: "ac", acStart: "10", acStop: "100k", acPts: "101" });
+    s.answers = { gain: "19.1", flo: "${ref5a.lo.toFixed(1)}", fhi: "${(ref5a.hi / 1000).toFixed(2)}k" };
+  });
+  T.vprobe(820, 140);
+})()`);
+const wrong5a = await page.evaluate(async () => {
+  window.T.set((s) => { s.answers.fhi = "1k"; });
+  return (await window.T.check("e101-05a")).failed.join(" | ");
+});
+check("5A: a wrong corner frequency is marked wrong", /Upper −3 dB/.test(wrong5a), wrong5a.slice(0, 120));
+check("5A: a wrong answer does not reveal the right one", !/1[4-9]\d{3}|17\.\d/.test(wrong5a), wrong5a);
+void s5a;
+
+/* ---------------------------------------------------------------- 5B */
+
+const ref5b = await page.evaluate(async () => {
+  window.T.open("e101-05b");
+  const L = window.__spiceLab;
+  L.store.toggleProbe("i", "R1", {});
+  const r = await L.simulate(L.store.state, null, { ...L.store.state.analysis, type: "tran", trStep: "10u", trStop: "5m" });
+  const t = r.traces.find((k) => k.name === "i(r1)");
+  return { max: Math.max(...t.values), min: Math.min(...t.values) };
+});
+check("5B reference: peak load current about 4.2 mA", ref5b.max > 3.8e-3 && ref5b.max < 4.6e-3, ref5b.max.toExponential(3));
+check("5B reference: the zener conducts in reverse, so current goes negative", ref5b.min < -0.2e-3, ref5b.min.toExponential(3));
+
+await lab("e101-05b", `(() => {
+  const T = window.T;
+  T.set((s) => {
+    s.title = "LAB 05B";
+    Object.assign(s.analysis, { type: "tran", trStop: "5m", trStep: "0.01m" });
+    s.answers = { ipk: "${(ref5b.max * 1000).toFixed(2)}m", imin: "${(ref5b.min * 1000).toFixed(2)}m" };
+  });
+  window.__spiceLab.store.toggleProbe("i", "R1", {});
+  T.vprobe(160, 120);
+})()`);
+
+const panes = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  await L.run();
+  return L.getResult().traces.map((t) => t.name);
+});
+check("5B: a run gives the R1 current and V(IN)", panes.includes("i(r1)") && panes.map((n) => n.toLowerCase()).includes("v(in)") , panes.join(", "));
+
+/* ---------------------------------------------------------------- 5C */
+
+await lab("e101-05c", () => {
+  const T = window.T;
+  T.add("NET", 160, 140, 0, { label: "NIN", name: "IN" });
+  T.add("NET", 520, 140, 0, { label: "NOUT", name: "OUT" });
+  T.set((s) => { s.title = "LAB 05C"; s.analysis.type = "op"; s.showBias = true; s.answers = { vout: "4.5", vmid: "6" }; });
+});
+const bias = await page.evaluate(async () => {
+  await window.__spiceLab.run();
+  window.__spiceLab.refresh();
+  return [...document.querySelectorAll(".bias-text")].map((t) => t.textContent);
+});
+check("5C: Show DC voltages prints node voltages on the sheet", bias.includes("4.5V") && bias.includes("6V") && bias.includes("12V"), bias.join(" "));
+const netl = await page.inputValue("#netOut");
+check("5C: aliases name the nodes in the netlist", /R2 \w+ OUT 1k/.test(netl) && /VS IN 0 DC 12/.test(netl), netl.split("\n").slice(1, 6).join(" | "));
+const staleBias = await page.evaluate(() => {
+  window.T.set(() => { window.T.comp("R4").value = "6k"; });
+  return document.querySelectorAll(".bias-text").length;
+});
+check("5C: stale voltages disappear once the circuit changes", staleBias === 0, `${staleBias} tags`);
+
+/* ---------------------------------------------------------------- 6A */
+
+await lab("e101-06a", () => {
+  window.T.series();
+  window.T.set((s) => { s.title = "LAB 06A"; s.answers = { nodes: "2" }; });
+});
+
+// Getting the source upside down is caught.
+const flipped = await page.evaluate(async () => {
+  window.T.set(() => { window.T.comp("VS").rot = 270; window.T.comp("VS").y = 220; });
+  return (await window.T.check("e101-06a")).failed.join(" | ");
+});
+check("6A: a source placed + down is caught", /VS should connect \+ to A/.test(flipped), flipped.slice(0, 140));
+
+/* ---------------------------------------------------------------- 6B */
+
+await lab("e101-06b", () => {
+  const T = window.T;
+  T.add("V", 160, 200, 90, { label: "VS", value: "DC 12", ac: "" });
+  T.add("R", 220, 120, 0, { label: "R1", value: "100" });
+  T.add("R", 440, 120, 0, { label: "R2", value: "600" });
+  T.add("R", 560, 200, 90, { label: "R3", value: "600" });
+  T.add("R", 360, 200, 90, { label: "R4", value: "1.2k" });
+  T.add("GND", 360, 340, 0, {});
+  T.add("NET", 160, 120, 0, { label: "NIN", name: "IN" });
+  T.add("NET", 560, 120, 0, { label: "NOUT", name: "OUT" });
+  T.wire([160, 200, 160, 120], [160, 120, 220, 120], [280, 120, 440, 120], [500, 120, 560, 120],
+         [560, 120, 560, 200], [560, 260, 560, 320], [560, 320, 160, 320], [160, 260, 160, 320],
+         [360, 120, 360, 200], [360, 260, 360, 320], [360, 320, 360, 340]);
+  T.set((s) => { s.title = "LAB 06B"; s.answers = { vout: "5.14" }; });
+});
+
+// R4 swapped to the output side is a different circuit.
+const swapped = await page.evaluate(async () => {
+  const T = window.T;
+  T.unwire(360, 120, 360, 200);
+  T.wire([360, 200, 360, 160], [360, 160, 520, 160], [520, 160, 520, 120]);
+  return (await T.check("e101-06b")).failed.join(" | ");
+});
+check("6B: R4 in the wrong place is caught", /R4 should connect/.test(swapped), swapped.slice(0, 140));
+
+/* ---------------------------------------------------------------- 6C */
+
+const build6c = () => {
+  const T = window.T;
+  T.add("V", 100, 260, 90, { label: "VS", value: "DC 0", ac: "1" });
+  T.add("C", 160, 200, 0, { label: "C1", value: "10u", ic: "" });
+  T.add("NPN", 300, 200, 0, { label: "Q1", model: "Q2N2222" });
+  T.add("NPN", 480, 280, 0, { label: "Q2", model: "Q2N2222" });
+  T.add("R", 340, 80, 90, { label: "RC1", value: "5k" });
+  T.add("R", 520, 80, 90, { label: "RC2", value: "5k" });
+  T.add("R", 430, 380, 90, { label: "REE", value: "4.8k" });
+  T.add("V", 40, 120, 90, { label: "VS1", value: "DC 12", ac: "" });
+  T.add("V", 40, 180, 90, { label: "VS2", value: "DC 12", ac: "" });
+  T.add("GND", 100, 420, 0, {});
+  T.add("GND", 70, 180, 270, {});
+  T.add("PWR", 430, 80, 0, { label: "P1", name: "VCC" });
+  T.add("PWR", 40, 120, 0, { label: "P2", name: "VCC" });
+  T.add("PWR", 430, 440, 180, { label: "P3", name: "VEE" });
+  T.add("PWR", 40, 240, 180, { label: "P4", name: "VEE" });
+  T.wire([100, 260, 100, 200], [100, 200, 160, 200], [220, 200, 300, 200],
+         [340, 240, 340, 360], [340, 360, 520, 360], [520, 320, 520, 360],
+         [480, 280, 260, 280], [260, 280, 260, 400], [260, 400, 100, 400],
+         [100, 320, 100, 400], [100, 400, 100, 420],
+         [340, 140, 340, 160], [520, 140, 520, 240], [340, 80, 520, 80],
+         [430, 360, 430, 380], [40, 180, 70, 180]);
+  T.set((s) => { s.title = "LAB 06C"; });
+};
+await lab("e101-06c", build6c);
+if (process.env.SHOTS) {
+  await page.evaluate(() => window.__spiceLab.canvas.fit());
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/6c.png" });
+}
+
+const cross = await page.evaluate(async () => {
+  const T = window.T;
+  // End the base wire on the emitter lead instead of crossing it.
+  T.unwire(480, 280, 260, 280);
+  T.wire([480, 280, 340, 280], [340, 280, 260, 280]);
+  return (await T.check("e101-06c")).failed.join(" | ");
+});
+check("6C: a junction at the crossover is caught", /crossover/.test(cross), cross.slice(0, 160));
+const net6c = await page.evaluate(async () => {
+  window.T.open("e101-06c");
+  return 0;
+});
+void net6c;
+
+/* ---------------------------------------------------------------- 7A-D */
+
+const sweep = `Object.assign(s.analysis, { type: "dc", dcSrc: "VS", dcStart: "-12", dcStop: "12", dcStep: "0.1" })`;
+
+await lab("e101-07a", `(() => {
+  const T = window.T;
+  T.series();
+  T.set((s) => { s.title = "LAB 07A"; ${sweep}; s.answers = { vhi: "9", vlo: "-9" }; });
+  T.vprobe(340, 100);
+})()`);
+const lab7aDoc = await page.evaluate(() => { window.__spiceLab.store.saveLabWork("e101-07a"); return true; });
+void lab7aDoc;
+
+// Opening 7B offers the 7A circuit; the dialog handler accepts.
+const carried = await page.evaluate(() => {
+  const sel = document.getElementById("labSelect");
+  sel.value = "e101-07b";
+  sel.dispatchEvent(new Event("change"));
+  const S = window.__spiceLab.store;
+  return { parts: S.state.comps.length, probes: S.state.probes.length, sweep: S.state.analysis.type };
+});
+check("7B: opening it carries the 7A circuit forward", carried.parts === 6 && carried.sweep === "dc", JSON.stringify(carried));
+check("7B: probes are not carried", carried.probes === 0);
+const back7a = await page.evaluate(() => {
+  const sel = document.getElementById("labSelect");
+  sel.value = "e101-07a";
+  sel.dispatchEvent(new Event("change"));
+  return { title: window.__spiceLab.store.state.title, answers: window.__spiceLab.store.state.answers };
+});
+check("7A: returning to a lab restores that lab's own work", back7a.title === "LAB 07A" && back7a.answers.vhi === "9", JSON.stringify(back7a));
+
+await lab("e101-07b", `(() => {
+  const T = window.T;
+  T.series();
+  T.set((s) => { s.title = "LAB 07B"; ${sweep}; s.answers = { vab: "3" }; });
+  window.__spiceLab.store.toggleProbe("vd", "160,100|340,100", { x: 160, y: 100, x2: 340, y2: 100 });
+})()`);
+
+const solve7c = `
+  T.series();
+  T.set((s) => {
+    T.comp("R1").value = "{RVAL}";
+    ${sweep};
+    Object.assign(s.analysis, { paramOn: true, paramName: "RVAL", paramMode: "lin", paramStart: "100", paramStop: "300", paramStep: "100" });
+  });
+  T.add("PARAM", 420, 40, 0, { label: "PARAM1", name: "RVAL", value: "100" });
+  T.vprobe(340, 100);`;
+
+await lab("e101-07c", `(() => {
+  const T = window.T;
+  ${solve7c}
+  T.set((s) => { s.title = "LAB 07C"; s.answers = { v100: "9", v200: "7.2", v300: "6" }; });
+})()`);
+
+const listMode = await page.evaluate(async () => {
+  window.T.set((s) => { Object.assign(s.analysis, { paramMode: "list", paramList: "100 200 300" }); });
+  return (await window.T.check("e101-07c")).ok;
+});
+check("7C: a value list of 100 200 300 is accepted too", listMode);
+const multi = await page.evaluate(async () => {
+  await window.__spiceLab.run();
+  return window.__spiceLab.getResult().traces.filter((t) => /^v\(b\)/i.test(t.name)).map((t) => t.name);
+});
+check("7C: a run draws one V(B) line per RVAL", multi.length === 3, multi.join(", "));
+const undefinedParam = await page.evaluate(() => {
+  window.T.set((s) => { s.comps = s.comps.filter((c) => c.type !== "PARAM"); });
+  window.__spiceLab.refresh();
+  return document.getElementById("checks").textContent;
+});
+check("7C: {RVAL} with no Parameter part is explained", /no Parameter part defines RVAL/.test(undefinedParam));
+
+await lab("e101-07d", `(() => {
+  const T = window.T;
+  ${solve7c}
+  T.add("R", 400, 100, 0, { label: "R3", value: "150" });
+  T.add("R", 520, 160, 90, { label: "R4", value: "150" });
+  T.wire([340, 100, 400, 100], [460, 100, 520, 100], [520, 100, 520, 160], [520, 220, 520, 280], [520, 280, 340, 280]);
+  T.set(() => { Object.assign(T.comp("NB"), { x: 520, y: 100 }); });
+  T.set((s) => { s.probes = []; s.title = "LAB 07D"; s.answers = { v100: "3.6" }; });
+  T.vprobe(520, 100);
+})()`);
+
+/* ------------------------------------------------------------- the UI */
+
+console.log("\n— sheet tools —");
+await page.evaluate(() => window.T.open("e101-06a"));
+await page.click('#partTools button[data-tool="NET"]');
+const box = await page.locator("svg.sheet").boundingBox();
+await page.mouse.click(box.x + box.width * 0.4, box.y + box.height * 0.4);
+await page.waitForTimeout(200);
+const editorUp = await page.evaluate(() => !!document.querySelector(".inline-edit"));
+check("placing a net alias asks for its name straight away", editorUp);
+await page.keyboard.type("OUT");
+await page.keyboard.press("Enter");
+await page.waitForTimeout(200);
+const netName = await page.evaluate(() => window.__spiceLab.store.state.comps.find((c) => c.type === "NET")?.name);
+check("the typed name is stored on the alias", netName === "OUT", netName);
+const aliasWarn = await page.textContent("#checks");
+check("an alias touching nothing is flagged", /names nothing/.test(aliasWarn));
+
+await page.keyboard.press("Escape");
+await page.evaluate(() => { window.T.open("e101-07b"); window.T.series(); });
+await page.click('#modeTools button[data-tool="vdiff"]');
+await page.evaluate(() => window.__spiceLab.canvas.fit());
+const pt = await page.evaluate(() => {
+  const svg = document.querySelector("svg.sheet");
+  const vb = svg.getAttribute("viewBox").split(" ").map(Number);
+  const r = svg.getBoundingClientRect();
+  const to = (x, y) => ({ x: r.left + ((x - vb[0]) / vb[2]) * r.width, y: r.top + ((y - vb[1]) / vb[3]) * r.height });
+  return { a: to(200, 100), b: to(340, 130) };
+});
+await page.mouse.click(pt.a.x, pt.a.y);
+await page.waitForTimeout(100);
+await page.mouse.click(pt.b.x, pt.b.y);
+await page.waitForTimeout(150);
+const dp = await page.evaluate(() => window.__spiceLab.store.state.probes);
+check("two clicks with Diff probe place one differential probe", dp.length === 1 && dp[0].kind === "vd", JSON.stringify(dp));
+const dpLabel = await page.evaluate(() => [...document.querySelectorAll(".probe-label")].map((t) => t.textContent));
+check("the probe is labelled with both node names", dpLabel.includes("v(A,B)"), dpLabel.join(","));
+
+await page.keyboard.press("Escape");
+const acDiff = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  L.store.edit((s) => { s.comps.find((c) => c.label === "VS").ac = "1"; Object.assign(s.analysis, { type: "ac", acPts: "5", acStart: "10", acStop: "1k" }); }, "t");
+  L.store.toggleProbe("i", "R1", {});
+  const r = await L.simulate(L.store.state);
+  const d = r.traces.find((t) => t.name === "v(A,B)");
+  const i = r.traces.find((t) => t.name === "i(r1)");
+  return { d: d?.mag[0], i: i?.mag[0] };
+});
+check("in AC, the differential trace is the drop across R1", Math.abs(acDiff.d - 0.25) < 1e-6, String(acDiff.d));
+check("in AC, a resistor current is worked out without hanging the engine", Math.abs(acDiff.i - 0.0025) < 1e-8, String(acDiff.i));
+
+const reset = await page.evaluate(() => {
+  window.T.set((s) => { s.title = "changed"; });
+  document.getElementById("btnLabReset").click();
+  return { parts: window.__spiceLab.store.state.comps.length, title: window.__spiceLab.store.state.title };
+});
+check("Start over puts back the starting sheet", reset.title === "Untitled circuit", JSON.stringify(reset));
+
+const faded = await page.evaluate(() => [...document.querySelectorAll("button.ghost")]
+  .filter((b) => !b.disabled && getComputedStyle(b).opacity !== "1").map((b) => b.id || b.textContent));
+check("secondary buttons are not drawn faded as if disabled", !faded.length, faded.join(", "));
+
+check("no page errors", errors.length === 0, errors.join(" / "));
+
+console.log(`\n${pass} passed, ${fail} failed\n`);
+await browser.close();
+server.close();
+process.exit(fail ? 1 : 0);

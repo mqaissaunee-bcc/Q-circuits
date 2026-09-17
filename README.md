@@ -17,7 +17,8 @@ npm run dev        # http://localhost:5173
 ```bash
 npm run build      # writes dist/
 npm run preview    # serves dist/ at http://localhost:4173
-node test/e2e.mjs  # 34 end-to-end checks against dist/
+node test/e2e.mjs        # the editor, engine and exploration labs, against dist/
+node test/labs101.mjs    # every ELEC 101 exercise: fails as supplied, passes when solved
 ```
 
 `dist/` is a static site. It deploys to GitHub Pages, Netlify, or any web root
@@ -216,35 +217,7 @@ weeks into a course. Failures are translated into what went wrong and what to
 do about it, with the offending netlist line quoted back and the original
 message one click away.
 
-**Course labs.** The ELEC 101 lab exercises live in `src/labs-elec101.js`,
-ported from the OrCAD Capture originals. What carries over is the electronics.
-What does not is the OrCAD procedure — title blocks, `USER.OLB`, ZIP disks,
-Design Templates — which taught a particular Windows program rather than
-circuits and has no counterpart here.
-
-Three exercise shapes, tagged by `kind` on each lab:
-
-| kind | the student is given | example |
-| --- | --- | --- |
-| `fix` | a circuit drawn with deliberate faults | 4A wiring faults, 4B bad value |
-| `simulate` | a correct circuit, no analysis set up | 5A AC sweep, 5B transient, 5C bias point |
-| `build` | nothing; they draw it | later labs |
-
-A check may set `needsSim: false`, which makes it a reading of the schematic
-rather than of a result. That matters for fault-finding: a broken circuit often
-will not simulate, and a student clicking Check should be told which faults are
-still outstanding rather than handed one engine error. Checks that do need a
-result report that they are waiting for the circuit to run.
-
-**Net labels.** A net label names the node it sits on, so the netlist reads
-`R1 IN 2 2k` rather than `R1 1 2 2k`, and probes and results follow the same
-names. Only unnamed nodes get numbers.
-
-**Node voltages on the schematic.** After an operating point run, Node voltages
-writes each result beside its node, the way a meter reading gets pencilled onto
-a printed schematic.
-
-**Labs.** Five built-in labs — voltage divider, RC low-pass, half-wave rectifier,
+**Labs.** Five guided labs — voltage divider, RC low-pass, half-wave rectifier,
 transistor bias, inverting amplifier — each with a starter circuit, tasks, and
 checks that run a real simulation and report against a tolerance.
 
@@ -259,10 +232,13 @@ src/
   engine.js         ngspice wrapper; normalises results, surfaces engine errors
   canvas.js         SVG rendering and every pointer gesture that edits the sheet
   scope.js          waveform plotting on a 2D canvas
-  labs.js           lab definitions and the check runner
+  simulate.js       one path from sheet to results: probes, saved currents,
+                    differential traces, parametric sweeps
+  labs.js           lab definitions, check builders and the check runner
   main.js           wiring: panels redraw from one refresh()
   styles.css        theme tokens, dark mode, responsive workspace
 test/e2e.mjs        end-to-end suite (Playwright)
+test/labs101.mjs    ELEC 101 lab suite: builds a correct solution to each exercise
 ```
 
 ### Notes on the error translations
@@ -353,11 +329,101 @@ Shapes are drawn in local coordinates with the anchor at (0,0); anything in
 `FILLED` is filled rather than stroked. `models` names cards from `MODEL_CARDS`,
 and only the ones actually used reach the netlist.
 
-## Adding a lab
+## Labs
 
-Append to `LABS` in `src/labs.js`. A lab is a starter circuit, a list of tasks,
-and checks that receive a context with `v(label, pin)`, `i(label)`,
-`trace(name)`, `part(label)`, and `value(str)` for parsing SPICE units.
+The lab list is grouped. **Explorations** are the original five guided labs.
+The **ELEC 101** groups are the PSpice lab exercises (Labs 4–7), rebuilt as
+twelve checked exercises:
+
+| Exercise | Kind | What the student does |
+|---|---|---|
+| 4A Fix the wiring errors | fix | Delete a stacked source, clear a wire shorting R1, join Q1's collector to its base, give V1 a value, add a ground |
+| 4B Fix a poor layout | fix | Take the space out of `1 k`, level V1/R2/R4, match the lead lengths, hang the ground under R2 |
+| 5A AC sweep | simulate | Set 10 Hz–100 kHz at 101 points/decade, probe OUT, read the gain and both −3 dB corners |
+| 5B Transient | simulate | Set 5 ms / 0.01 ms, probe the R1 current and V(IN), read the peak and the zener's reverse current |
+| 5C Bias point | simulate | Add IN and OUT net aliases, run the operating point, show node voltages on the sheet |
+| 6A Series circuit | draw | Draw it, name nodes A and B, count the nodes in the netlist |
+| 6B Series-parallel | draw | Draw a four-resistor network with IN and OUT |
+| 6C Differential pair | draw | Q2N2222 pair with VCC/VEE power symbols and a crossover that must not connect |
+| 7A DC sweep | draw | Sweep VS −12 to 12 V and probe B |
+| 7B Differential probe | draw | Measure V(A,B) across R1 |
+| 7C Parametric sweep | draw | R1 = {RVAL}, a PARAMETERS part, and RVAL stepped 100/200/300 |
+| 7D Extended divider | draw | Add R3/R4, move B, keep both sweeps |
+
+How they behave:
+
+- **Each lab keeps its own sheet.** Switching labs saves the one you leave and
+  restores the one you open, so only free-build work triggers the
+  "unsaved changes" prompt. *Start over* restores the starting circuit.
+- **Carry forward.** 7B and 7C offer to start from the student's 7A circuit,
+  7D from 7C, the way the handout copies one project into the next. The
+  circuit and analysis come across; probes do not.
+- **Checks work on connections, not coordinates.** A draw lab passes however
+  the student lays it out, as long as each part joins the right nodes, with
+  sources checked for polarity. Layout is only graded in 4B, where layout is
+  the point.
+- **Simulate labs grade the student's own settings** (`useStudentAnalysis`).
+  Other labs run their own analysis for checking.
+- **Answer boxes** are marked against the simulation, or against a separate
+  reference run (`reference`) when the student's sweep might not cover the
+  answer. A wrong answer says so without revealing the right value.
+- **A failed simulation does not stop marking.** Structural checks still
+  report; checks that need results say what stopped them.
+- The sheet title stands in for the Brookdale title block: each exercise
+  checks it reads `LAB 04A` and so on.
+
+### Adding a lab
+
+Append to `ELEC101` (or a new array) in `src/labs.js` and give it a `group`
+from `LAB_GROUPS`. A lab has a starter `circuit`, `tasks`, optional
+`questions`, and `checks`. Most checks come from the `K` builders:
+
+```js
+K.title("08A"),
+K.parts({ VS: { dc: 12, type: "V" }, R1: "1k", Q1: { model: "Q2N2222" } }),
+K.wiring([["VS", ["IN", 0], true], ["R1", ["IN", "OUT"]]]),
+K.noOpenEnds(),
+K.dc("VS", 0, 10, 0.1),   // also K.ac, K.tran, K.op, K.param
+K.probe("OUT", "OUT"),
+K.sim("OUT reaches 5 V", (ctx) => ({ pass: Math.abs(ctx.vn("OUT") - 5) < 0.01, detail: "" }))
+```
+
+A node is written as `0` (ground), `"OUT"` (a net alias), `["R1", 1]` (a pin),
+or `{ other: "R1", from: "IN" }` (whichever end of R1 is not on IN), so an
+unnamed junction can still be described. Custom checks receive a context with
+`vn(spec)`, `nodeTrace(spec, step)`, `trace(name, step)`, `at(trace, x)`,
+`joins(label, specs, ordered)`, `span(label)`, `probeOn(spec)`,
+`diffProbe(a, b)`, `currentProbe(label)`, `openEnds()`, `analysis`,
+`answers`, and the older `v(label, pin)`, `i(label)` and `part(label)`.
+
+Then add the correct solution to `test/labs101.mjs`, so the suite proves the
+lab can be passed and that its starting sheet cannot.
+
+## Naming nodes, sweeping parameters
+
+- **Net alias (K)** puts a name on a wire. Every alias with the same name is
+  one node, and the name replaces the number in the netlist, so a probe reads
+  `v(out)`. An alias called `0` or `GND` is ground.
+- **Power symbol (P)** is the same thing drawn as PSpice's VCC_BAR. Rotate it
+  180° for a VEE bar.
+- **Parameter** defines a name that any value can use as `{NAME}`.
+  *Parametric sweep* in the Analysis panel runs the whole analysis once per
+  value (linear steps or a list, at most 12) and overlays the results.
+  ngspice has no `.step`, so these really are separate runs, merged afterwards.
+- **Diff probe (X)**: click the + side, then the − side. The trace is
+  computed from the two node voltages, and works in AC too.
+- **Current probes** now work on resistors, capacitors and diodes as well.
+  Traces are named `i(r1)`. When volts and amps are both plotted they get
+  separate panes, like PSpice's Add Plot to Window.
+- **Show DC voltages** prints the operating-point voltage at each node, like
+  PSpice's V button. The tags disappear as soon as the circuit changes.
+
+### PSpice models
+
+`Q2N2222` (the card from the Lab 6 handout), `Q2N3904`, `Q2N3906` and
+`D1N750` are in the model lists. The D1N750 card is trimmed: the library
+version's `Nbv`, `Ibvl` and `Nbvl` make this ngspice build exit fatally,
+which takes the engine down for the rest of the session.
 
 ### The op-amp
 
@@ -404,35 +470,21 @@ without the wires.
 Alt-drag used to pan. Now that there is a dedicated hand tool and middle-drag
 still pans, Alt-drag is free for the more useful gesture of dragging off a copy.
 
-### Two ways to hang the engine, and the guards against them
-
-Both were found by testing, not by reading; ngspice-WASM does not report either
-as an error. It stops responding, taking the browser thread with it, and the
-tab cannot be recovered.
-
-**Any non-ASCII byte in the netlist.** A student writing `10µF` or `4.7kΩ`, or
-a circuit title containing an em dash, was enough. The netlist is now
-transliterated to ASCII as it is generated — µ becomes `u`, which is what SPICE
-means by it, and Ω is dropped, turning `4.7kΩ` into the `4.7k` that was
-intended. `src/engine.js` sanitises again at the boundary. The student is told
-when a value was converted.
-
-**A loop of voltage sources.** Two sources wired in parallel across the same
-pair of nodes, which is an ordinary student mistake and is exactly fault one of
-Lab 4A. `blockingFaults()` in `src/netlist.js` inspects the circuit and refuses
-the run with an explanation naming both parts. Only genuinely hanging
-constructs belong in that list: a bad value or a dangling node produces a clean
-ngspice error, and a student learns more from seeing the engine report it.
-
 ## Known limits
 
-- The op-amp has rails but no supply pins: they are fields on the part rather
-  than nodes you wire. It also has no slew-rate limit, no input offset, no
-  frequency compensation, and no output resistance. Those need a `.subckt` for
-  a specific device.
-- Current probes work on ammeters, voltage sources, and inductors, which is
-  what ngspice exposes as `i(...)` without extra `.save` directives. To measure
-  current anywhere else, drop an ammeter into the branch.
+- The three-pin op-amp has rails as fields rather than supply pins. The
+  **LM324** part has real V+ and V− pins, a dominant pole for a 1 MHz
+  gain-bandwidth, and an output that stops short of each supply. Neither has
+  a slew-rate limit, input offset or output resistance.
+- The LM324 is two behavioural stages, not one clamped expression. Clamping
+  inside the gain expression leaves the loop gain at zero on ngspice's first
+  iteration, when both supplies still read 0 V, and the operating point never
+  converges.
+- Resistor and capacitor currents come from `.save @r1[i]` in DC and
+  transient runs. Asking for them in an AC run hangs this ngspice build, so in
+  AC they are calculated from the node voltages instead.
+- A parametric sweep is capped at 12 runs. Transient runs with different
+  timesteps are resampled onto the first run's time points before overlaying.
 - The switch is emitted as a resistor (1 mΩ closed, 1 GΩ open) named `R` +
   its label, so `SW1` appears in the netlist as `RSW1`.
 - MOSFET models are Level 1 and are for teaching behaviour, not device accuracy.

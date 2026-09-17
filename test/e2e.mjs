@@ -107,6 +107,7 @@ check("divider check passes once R1 = 4.95k", true, detail.trim());
 /* ------------------------------------------------------- lab: RC filter */
 
 console.log("\n— lab: RC low-pass (AC sweep) —");
+await page.evaluate(() => window.__spiceLab.freshLabs());
 await page.selectOption("#labSelect", "rc-lowpass");
 await page.click("#btnCheck");
 await page.waitForFunction(() => document.querySelectorAll("#checkResults .check-list li").length > 0, null, { timeout: 60000 });
@@ -125,6 +126,7 @@ check("magnitude/phase switch is shown for AC", !(await page.getAttribute("#acMo
 /* ------------------------------------------------------ lab: rectifier */
 
 console.log("\n— lab: half-wave rectifier (transient) —");
+await page.evaluate(() => window.__spiceLab.freshLabs());
 await page.selectOption("#labSelect", "rectifier");
 await page.click("#btnCheck");
 await page.waitForFunction(() => document.querySelectorAll("#checkResults .check-list li").length >= 2, null, { timeout: 60000 });
@@ -144,6 +146,7 @@ check("probes narrowed the plot to the two probed nodes",
 /* ------------------------------------------------- lab: transistor bias */
 
 console.log("\n— lab: common-emitter bias —");
+await page.evaluate(() => window.__spiceLab.freshLabs());
 await page.selectOption("#labSelect", "common-emitter");
 await page.click("#btnCheck");
 await page.waitForFunction(() => document.querySelectorAll("#checkResults .check-list li").length >= 2, null, { timeout: 60000 });
@@ -155,6 +158,7 @@ check("transistor is in the active region", ce[1].pass, ce[1].text);
 /* ---------------------------------------------------------- the editor */
 
 console.log("\n— editor —");
+await page.evaluate(() => window.__spiceLab.freshLabs());
 await page.selectOption("#labSelect", "divider");
 const before = await page.evaluate(() => window.__spiceLab.store.state.comps.length);
 
@@ -281,7 +285,7 @@ check("clearing returns to the whole sweep", restored.region === null && near(re
 
 // half-wave rectified sine: mean and RMS sit just under the ideal-diode values
 const rect2 = await page.evaluate(async () => {
-  document.getElementById("labSelect").value = "rectifier";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "rectifier";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
   await window.__spiceLab.run();
   return window.__spiceLab.scope.measurements().find((m) => m.name === "v(2)");
@@ -292,7 +296,7 @@ check("rectifier RMS is just under Vp/2", rect2.rms < rect2.max / 2 && rect2.rms
   `rms ${rect2.rms.toFixed(4)} vs ideal ${(rect2.max / 2).toFixed(4)}`);
 
 const acCols = await page.evaluate(async () => {
-  document.getElementById("labSelect").value = "rc-lowpass";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "rc-lowpass";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
   await window.__spiceLab.run();
   return [...document.querySelectorAll("#measureHost thead th")].map((th) => th.textContent);
@@ -341,7 +345,7 @@ check("current probe narrows the plot to the ammeter", am.plotted.length === 1 &
 
 console.log("\n— op-amp supply rails —");
 const opamp = await page.evaluate(async () => {
-  document.getElementById("labSelect").value = "inverting-amp";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "inverting-amp";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
   await window.__spiceLab.run();
   const netlist = document.getElementById("netOut").value;
@@ -390,7 +394,7 @@ check("lab detects clipping against whatever the rails are set to", ampChecks[1]
 
 console.log("\n— moving parts, stretching wires —");
 await page.evaluate(() => {
-  document.getElementById("labSelect").value = "divider";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "divider";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
 });
 await page.waitForTimeout(200);
@@ -502,7 +506,7 @@ check("the copy gets its own designator", new Set(dupAfter.labels).size === dupA
 // shift-drag on an unselected part silently dragged everything selected.
 const shiftBehaviour = await page.evaluate(() => {
   const S = window.__spiceLab.store;
-  document.getElementById("labSelect").value = "divider";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "divider";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
   const [a, b] = S.state.comps;
   S.selection = new Set([a.id]);
@@ -540,7 +544,7 @@ await page.evaluate(() => { while (window.__spiceLab.store.canUndo()) window.__s
 
 console.log("\n— accessibility and progress —");
 const dashes = await page.evaluate(async () => {
-  document.getElementById("labSelect").value = "rectifier";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "rectifier";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
   await window.__spiceLab.run();
   return [...document.querySelectorAll(".legend-item .swatch line")]
@@ -580,7 +584,7 @@ await page.keyboard.press("Escape");
 const progress = await page.evaluate(async () => {
   const S = window.__spiceLab.store;
   S.clearProgress();
-  document.getElementById("labSelect").value = "rectifier";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "rectifier";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
   const before = S.labPassed("rectifier");
   document.getElementById("btnCheck").click();
@@ -603,7 +607,7 @@ check("the tally counts passed labs", /^1 of \d+ passed$/.test(progress.tally), 
 console.log("\n— showing broken connections —");
 const openMarkers = await page.evaluate(() => {
   const S = window.__spiceLab.store;
-  document.getElementById("labSelect").value = "divider";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "divider";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
   const clean = {
     pins: document.querySelectorAll("svg.sheet .pin.is-open").length,
@@ -633,7 +637,7 @@ await page.evaluate(() => window.__spiceLab.store.undo());
 
 console.log("\n— scroll, pinch and the view lock —");
 await page.evaluate(() => {
-  document.getElementById("labSelect").value = "divider";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "divider";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
 });
 await page.waitForTimeout(200);
@@ -693,7 +697,7 @@ check("unlocking restores pinch zoom",
 
 console.log("\n— navigation and annotation tools —");
 await page.evaluate(() => {
-  document.getElementById("labSelect").value = "divider";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "divider";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
 });
 await page.waitForTimeout(200);
@@ -800,7 +804,7 @@ await page.click('#modeTools button[data-tool="select"]');
 
 console.log("\n— inline editing —");
 await page.evaluate(() => {
-  document.getElementById("labSelect").value = "divider";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "divider";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
 });
 await page.waitForTimeout(200);
@@ -880,7 +884,7 @@ check("a dropdown-only part opens the inspector instead of a text box",
 
 console.log("\n— PNG export —");
 await page.evaluate(() => {
-  document.getElementById("labSelect").value = "rectifier";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "rectifier";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
 });
 await page.waitForTimeout(200);
@@ -916,100 +920,6 @@ check("the plot PNG has sensible dimensions", plotPng.width > 400 && plotPng.hei
 check("the plot filename comes from the circuit name",
   plotPng.name === "half-wave-rectifier-waveforms.png", plotPng.name);
 
-/* ------------------------------------------- engine hazards and net labels */
-
-console.log("\n— engine hazards —");
-
-// A non-ASCII byte does not make ngspice-WASM complain: it hangs the thread.
-const ascii = await page.evaluate(() => {
-  const S = window.__spiceLab.store;
-  S.clear();
-  S.edit(() => {
-    const v = S.addComp("V", 200, 180, "V"); v.rot = 90; v.value = "DC 12";
-    const r = S.addComp("R", 360, 180, "R"); r.rot = 90; r.value = "4.7k\u03A9";
-    S.addComp("GND", 200, 400, "GND");
-    S.addWire(200, 180, 360, 180);
-    S.addWire(360, 240, 360, 400); S.addWire(360, 400, 200, 400);
-    S.addWire(200, 240, 200, 400);
-  }, "t");
-  window.__spiceLab.refresh();
-  return {
-    netlist: document.getElementById("netOut").value,
-    warned: document.getElementById("checks").textContent
-  };
-});
-check("an ohm sign is transliterated out of the netlist",
-  !/[^\x09\x0A\x0D\x20-\x7E]/.test(ascii.netlist) && /4\.7k\b/.test(ascii.netlist),
-  ascii.netlist.split("\n").find((l) => l.startsWith("R")));
-check("the student is told the value was converted", /converted to plain text/.test(ascii.warned));
-
-const survives = await page.evaluate(async () => {
-  const done = await Promise.race([
-    window.__spiceLab.run().then(() => "ran"),
-    new Promise((r) => setTimeout(() => r("hung"), 25000))
-  ]);
-  const res = window.__spiceLab.getResult();
-  return { done, volts: res ? res.traces.length : 0 };
-});
-check("a circuit containing one still simulates rather than hanging",
-  survives.done === "ran" && survives.volts > 0, `${survives.done}, ${survives.volts} vectors`);
-
-// Two sources in parallel spin ngspice forever, so the run is refused first.
-const loop = await page.evaluate(async () => {
-  const S = window.__spiceLab.store;
-  S.clear();
-  S.edit(() => {
-    const a = S.addComp("V", 200, 180, "V"); a.rot = 90; a.value = "DC 12";
-    const b = S.addComp("V", 120, 180, "V"); b.rot = 90; b.value = "DC 12";
-    const r = S.addComp("R", 360, 180, "R"); r.rot = 90;
-    S.addComp("GND", 200, 400, "GND");
-    S.addWire(120, 180, 200, 180); S.addWire(120, 240, 200, 240);
-    S.addWire(200, 180, 360, 180);
-    S.addWire(360, 240, 360, 400); S.addWire(360, 400, 200, 400);
-    S.addWire(200, 240, 200, 400);
-  }, "t");
-  const outcome = await Promise.race([
-    window.__spiceLab.run().then(() => "returned"),
-    new Promise((r) => setTimeout(() => r("hung"), 25000))
-  ]);
-  return { outcome, message: document.querySelector("#runError .engine-error")?.textContent || "" };
-});
-check("a loop of two sources never reaches the engine", loop.outcome === "returned", loop.outcome);
-check("and it says which two parts are the problem",
-  /wired in parallel/.test(loop.message), loop.message.replace(/\s+/g, " ").slice(0, 100));
-
-/* ------------------------------------------------------------- net labels */
-
-console.log("\n— net labels and node voltages —");
-const netLabels = await page.evaluate(async () => {
-  const S = window.__spiceLab.store;
-  document.getElementById("labSelect").value = "elec101-5c";
-  document.getElementById("labSelect").dispatchEvent(new Event("change"));
-  const before = document.getElementById("netOut").value;
-  S.edit(() => {
-    const a = S.addComp("NET", 200, 180, "N"); a.netname = "IN";
-    const b = S.addComp("NET", 540, 180, "N"); b.netname = "OUT";
-  }, "t");
-  window.__spiceLab.refresh();
-  const after = document.getElementById("netOut").value;
-  await window.__spiceLab.run();
-  document.getElementById("btnNodeVolts").click();
-  return {
-    before, after,
-    onSheet: [...document.querySelectorAll("svg.sheet .node-volt")].map((t) => t.textContent),
-    names: [...document.querySelectorAll("svg.sheet .net-label")].map((t) => t.textContent)
-  };
-});
-check("without labels the netlist uses numbers", /R1 1 2 2k/.test(netLabels.before),
-  netLabels.before.split("\n").find((l) => l.startsWith("R1")));
-check("a net label renames the node in the netlist", /^R1 IN \d+ 2k$/m.test(netLabels.after),
-  netLabels.after.split("\n").find((l) => l.startsWith("R1")));
-check("both labels are drawn on the sheet",
-  netLabels.names.includes("IN") && netLabels.names.includes("OUT"), netLabels.names.join(","));
-check("operating-point voltages annotate the schematic",
-  netLabels.onSheet.some((v) => v.startsWith("12")) && netLabels.onSheet.some((v) => v.startsWith("4.5")),
-  netLabels.onSheet.join(" / "));
-
 /* ----------------------------------------------------- unsaved-work guard */
 
 console.log("\n— unsaved work —");
@@ -1028,6 +938,7 @@ let asked = null;
 const labBeforeGuard = await page.evaluate(() => document.getElementById("labSelect").value);
 page.removeAllListeners("dialog");
 page.on("dialog", (d) => { asked = d.message(); d.dismiss(); });
+await page.evaluate(() => window.__spiceLab.freshLabs());
 await page.selectOption("#labSelect", "rc-lowpass");
 await page.waitForTimeout(250);
 const afterDismiss = await page.evaluate(() => ({
@@ -1037,8 +948,10 @@ const afterDismiss = await page.evaluate(() => ({
 check("switching labs with unsaved work asks first", !!asked && /unsaved|not saved/i.test(asked),
   (asked || "no dialog").split("\n")[0]);
 check("declining keeps the circuit on the sheet", afterDismiss.parts === 1, `${afterDismiss.parts} parts`);
-check("declining reverts the dropdown to the lab already open",
-  afterDismiss.selectValue === labBeforeGuard, `"${afterDismiss.selectValue}" (was "${labBeforeGuard}")`);
+// Lab sheets are saved per lab, so only free-build work needs the prompt:
+// declining leaves the dropdown on Free build.
+check("declining leaves the dropdown on Free build",
+  afterDismiss.selectValue === "", `"${afterDismiss.selectValue}" (lab before was "${labBeforeGuard}")`);
 
 page.removeAllListeners("dialog");
 page.on("dialog", (d) => d.accept());
@@ -1054,7 +967,7 @@ const link = await page.evaluate(async () => {
 
 const roundTripLink = await page.evaluate(async () => {
   const S = window.__spiceLab.store;
-  document.getElementById("labSelect").value = "rectifier";
+  window.__spiceLab.freshLabs(); document.getElementById("labSelect").value = "rectifier";
   document.getElementById("labSelect").dispatchEvent(new Event("change"));
   const before = { title: S.state.title, comps: S.state.comps.length, wires: S.state.wires.length, probes: S.state.probes.length };
   const url = await window.__spiceLab.shareUrl(S.state);

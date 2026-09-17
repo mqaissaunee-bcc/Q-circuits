@@ -8,7 +8,7 @@
  * makes a wire ending part-way along another wire behave as a real tee.
  */
 
-import { PARTS, MODEL_CARDS, pinsOf, netlistNameOf } from "./parts.js";
+import { PARTS, MODEL_CARDS, pinsOf, boxOf, netlistNameOf, isVirtual, netNameOf } from "./parts.js";
 
 /* ----------------------------------------------------------- connectivity */
 
@@ -46,46 +46,46 @@ export function buildNodes(comps, wires) {
     pts.forEach((p, i) => { if (onSegment(p, w)) union(anchor, i); });
   });
 
-  // any group touching a ground symbol is node 0
-  const grounded = new Set();
-  pts.forEach((p, i) => { if (p.comp && p.comp.type === "GND") grounded.add(find(i)); });
-
-  // A net label renames the node it sits on, so the netlist reads in the
-  // circuit's own terms rather than in numbers the editor happened to assign.
-  const labelOfRoot = new Map();
-  const labelClashes = [];
+  // Aliases and power symbols with the same name are one node, however far
+  // apart they are drawn. SPICE names are case-insensitive, so matching is too.
+  const byName = new Map();
   pts.forEach((p, i) => {
-    if (!p.comp || p.comp.type !== "NET") return;
-    const wanted = String(p.comp.netname || "").trim();
-    if (!wanted) return;
+    const nm = p.comp ? netNameOf(p.comp) : null;
+    if (!nm) return;
+    const key = nm.toLowerCase();
+    if (byName.has(key)) union(byName.get(key), i); else byName.set(key, i);
+  });
+
+  // any group touching a ground symbol, or an alias called 0 or GND, is node 0
+  const grounded = new Set();
+  const namesOfRoot = new Map();
+  pts.forEach((p, i) => {
+    if (!p.comp) return;
+    if (p.comp.type === "GND") { grounded.add(find(i)); return; }
+    const nm = netNameOf(p.comp);
+    if (!nm) return;
+    if (nm === "0" || nm.toLowerCase() === "gnd") { grounded.add(find(i)); return; }
     const r = find(i);
-    if (labelOfRoot.has(r) && labelOfRoot.get(r) !== wanted) {
-      labelClashes.push({ kind: "two-names", a: labelOfRoot.get(r), b: wanted });
-    } else {
-      labelOfRoot.set(r, wanted);
-    }
+    if (!namesOfRoot.has(r)) namesOfRoot.set(r, new Map());
+    namesOfRoot.get(r).set(nm.toLowerCase(), nm);
   });
 
   const nodeOfRoot = new Map();
-  const usedNames = new Map();
+  const conflicts = [];            // [[nameA, nameB, ...]] one node, several names
   let next = 0;
   pts.forEach((_, i) => {
     const r = find(i);
     if (nodeOfRoot.has(r)) return;
-    if (grounded.has(r)) { nodeOfRoot.set(r, "0"); return; }
-    const label = labelOfRoot.get(r);
-    if (label) {
-      if (usedNames.has(label)) labelClashes.push({ kind: "reused", a: label });
-      usedNames.set(label, r);
-      nodeOfRoot.set(r, label);
-    } else {
-      nodeOfRoot.set(r, String(++next));
+    if (grounded.has(r)) { nodeOfRoot.set(r, 0); return; }
+    const names = namesOfRoot.get(r);
+    if (names && names.size) {
+      const sorted = [...names.values()].sort((a, b) => a.localeCompare(b));
+      if (sorted.length > 1) conflicts.push(sorted);
+      nodeOfRoot.set(r, spiceNodeName(sorted[0]));
+      return;
     }
+    nodeOfRoot.set(r, ++next);
   });
-
-  // a label on the ground net cannot rename node 0
-  const groundLabels = [];
-  labelOfRoot.forEach((name, r) => { if (grounded.has(r)) groundLabels.push(name); });
 
   const pinNode = new Map();      // comp.id:pinIndex -> node
   const coordNode = new Map();    // "x,y" -> node
@@ -107,56 +107,40 @@ export function buildNodes(comps, wires) {
 
   const pinCount = new Map();     // node -> how many part pins touch it
   comps.forEach((c) => {
-    if (c.type === "GND") return;
+    if (isVirtual(c)) return;
     pinsOf(c).forEach((_, i) => {
       const nd = pinNode.get(`${c.id}:${i}`);
       pinCount.set(nd, (pinCount.get(nd) || 0) + 1);
     });
   });
 
-  return { pinNode, coordNode, degree, pinCount, count: next, labelClashes, groundLabels };
+  const distinct = new Set([...nodeOfRoot.values()].filter((n) => n !== 0));
+  return { pinNode, coordNode, degree, pinCount, conflicts, count: distinct.size };
+}
+
+/**
+ * Turn a user's net name into something ngspice will accept as a node.
+ * A bare number would collide with the numbers the connectivity pass hands
+ * out, so it gets a prefix.
+ */
+export function spiceNodeName(name) {
+  const clean = String(name).trim().replace(/[^A-Za-z0-9_]/g, "_");
+  return /^\d+$/.test(clean) ? `N${clean}` : clean;
+}
+
+/**
+ * The node under a sheet point: a pin or wire end, or anywhere along a wire.
+ * Probes can sit mid-wire, and those points are not in coordNode.
+ */
+export function nodeAtPoint(net, wires, x, y) {
+  const direct = net.coordNode.get(`${x},${y}`);
+  if (direct !== undefined) return direct;
+  const w = wires.find((k) => onSegment({ x, y }, k));
+  return w ? net.coordNode.get(`${w.x1},${w.y1}`) : undefined;
 }
 
 export function nodesFor(comp, net) {
   return PARTS[comp.type].pins.map((_, i) => net.pinNode.get(`${comp.id}:${i}`));
-}
-
-/* ----------------------------------------------------------- ascii safety */
-
-/**
- * ngspice compiled to WASM does not merely reject a non-ASCII byte — it hangs,
- * locking the browser thread with no error and no way back. A student typing
- * 10µF or 4.7kΩ, or a circuit title with an em dash, would freeze the tab.
- *
- * So the netlist is transliterated to plain ASCII before it is ever generated.
- * The substitutions are the ones that carry meaning — µ really does mean u to
- * SPICE — and anything else outside printable ASCII is dropped, which turns
- * 4.7kΩ into the 4.7k that was meant.
- */
-const ASCII_SUBSTITUTIONS = [
-  [/[\u00B5\u03BC]/g, "u"],        // micro sign, Greek mu
-  [/[\u03A9\u2126]/g, ""],         // ohm sign: the unit is implied
-  [/[\u2212\u2013\u2014]/g, "-"], // minus sign, en dash, em dash
-  [/[\u2018\u2019]/g, "'"],
-  [/[\u201C\u201D]/g, '"'],
-  [/\u00D7/g, "*"],
-  [/\u00F7/g, "/"],
-  [/\u03C0/g, "pi"],
-  [/\u00A0/g, " "],                // non-breaking space
-  [/\u00B0/g, ""]                  // degree sign
-];
-
-export function toAscii(text) {
-  let out = String(text);
-  ASCII_SUBSTITUTIONS.forEach(([pattern, replacement]) => {
-    out = out.replace(pattern, replacement);
-  });
-  // Anything still outside printable ASCII would hang the engine.
-  return out.replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "");
-}
-
-export function hasNonAscii(text) {
-  return /[^\x09\x0A\x0D\x20-\x7E]/.test(String(text));
 }
 
 /* -------------------------------------------------------------- directives */
@@ -172,15 +156,23 @@ export function analysisDirective(a) {
 
 /* ---------------------------------------------------------------- netlist */
 
-export function buildNetlist(comps, wires, analysis, title = "Circuit from the schematic sheet") {
+/**
+ * `extra.overrides` maps lower-case parameter names to the value a parametric
+ * sweep wants for this run. `extra.saves` lists device quantities to keep,
+ * such as @r1[i], which ngspice does not record unless asked.
+ */
+export function buildNetlist(comps, wires, analysis, title = "Circuit from the schematic sheet", extra = {}) {
   const net = buildNodes(comps, wires);
   const lines = [`* ${title}`];
   const models = new Set();
+  const ctx = { overrides: extra.overrides || {} };
 
-  comps.forEach((c) => {
+  // .param cards first: ngspice resolves {NAME} as it reads each line.
+  const ordered = [...comps].sort((a, b) => (a.type === "PARAM" ? 0 : 1) - (b.type === "PARAM" ? 0 : 1));
+  ordered.forEach((c) => {
     const def = PARTS[c.type];
     const nd = nodesFor(c, net);
-    def.emit(c, nd).forEach((l) => lines.push(l));
+    def.emit(c, nd, ctx).forEach((l) => lines.push(l));
     def.models(c).forEach((m) => models.add(m));
   });
 
@@ -193,118 +185,119 @@ export function buildNetlist(comps, wires, analysis, title = "Circuit from the s
   }
 
   lines.push("");
+  if (extra.saves && extra.saves.length) lines.push(`.save all ${extra.saves.join(" ")}`);
   lines.push(analysisDirective(analysis));
   lines.push(".end");
-
-  const body = lines.slice(1).join("\n");
-  const text = toAscii(lines.join("\n"));
-  // Only flag characters the student typed; the title line is ours to clean.
-  return { text, net, transliterated: toAscii(body) !== body };
-}
-
-/* --------------------------------------------------------- blocking faults */
-
-/**
- * Faults that must never reach the engine.
- *
- * ngspice-WASM does not reject a loop of voltage sources — it spins forever,
- * locking the browser thread with no error and no way to recover short of
- * closing the tab. Two identical sources wired in parallel is a routine
- * student mistake, so the circuit is inspected for it here and the run is
- * refused with an explanation instead.
- *
- * Only genuinely hanging constructs belong in this list. Ordinary mistakes —
- * a bad value, a dangling node — produce a clean ngspice error and are far
- * more useful to a student when they see the engine report them.
- */
-export function blockingFaults(comps, net) {
-  const faults = [];
-
-  // Each of these drives a node hard: a voltage source, an ammeter (a 0 V
-  // source) and an ideal op-amp output, which is a source referred to ground.
-  const driven = [];
-  comps.forEach((c) => {
-    if (c.type === "V" || c.type === "AM") {
-      const nd = nodesFor(c, net);
-      driven.push({ label: c.label, a: nd[0], b: nd[1] });
-    } else if (c.type === "OPAMP") {
-      const nd = nodesFor(c, net);
-      driven.push({ label: c.label, a: nd[2], b: "0" });
-    }
-  });
-
-  driven.forEach((d) => {
-    if (d.a === d.b) {
-      faults.push(`${d.label} has both of its terminals on the same node, which short-circuits it. Remove the short, or the part.`);
-    }
-  });
-
-  for (let i = 0; i < driven.length; i++) {
-    for (let j = i + 1; j < driven.length; j++) {
-      const x = driven[i], y = driven[j];
-      if (x.a === x.b || y.a === y.b) continue;
-      const same = (x.a === y.a && x.b === y.b) || (x.a === y.b && x.b === y.a);
-      if (same) {
-        faults.push(`${x.label} and ${y.label} are wired in parallel across the same two nodes. Two sources cannot both set the voltage there — remove one of them.`);
-      }
-    }
-  }
-
-  return faults;
+  return { text: lines.join("\n"), net };
 }
 
 /* ------------------------------------------------------------- validation */
 
-export function validate(comps, wires, net, analysis, transliterated = false) {
+export function validate(comps, wires, net, analysis) {
   const msgs = [];
+  const parts = comps.filter((c) => !isVirtual(c));
 
-  if (transliterated) {
-    msgs.push({
-      level: "warn",
-      text: "Characters such as µ or Ω were converted to plain text for the simulator. Write values as 10u and 4.7k."
-    });
-  }
-  const parts = comps.filter((c) => c.type !== "GND");
-
-  if (!parts.length) {
+  if (!comps.length) {
     return [{ level: "warn", text: "The sheet is empty. Drop a part, or open one of the labs." }];
   }
-  if (!comps.some((c) => c.type === "GND")) {
+  if (!parts.length) {
+    msgs.push({ level: "warn", text: "There are no circuit parts on the sheet yet, only labels and symbols." });
+  } else if (!comps.some((c) => c.type === "GND")) {
     msgs.push({ level: "error", text: "No ground. SPICE needs one node numbered 0 as its voltage reference — place a ground symbol." });
   }
 
   const seen = new Map();
   parts.forEach((c) => {
     const name = netlistNameOf(c);
-    if (seen.has(name)) msgs.push({ level: "error", text: `Two parts are both called ${name}. Reference designators have to be unique.` });
-    seen.set(name, true);
-    PARTS[c.type].fields.forEach((f) => {
+    if (seen.has(name.toLowerCase())) msgs.push({ level: "error", text: `Two parts are both called ${name}. Reference designators have to be unique.` });
+    seen.set(name.toLowerCase(), true);
+    const prefix = PARTS[c.type].prefix;
+    if (!PARTS[c.type].netlistName && !c.label.toUpperCase().startsWith(prefix)) {
+      msgs.push({ level: "error", text: `${c.label} is a ${PARTS[c.type].name.toLowerCase()}, so its name has to start with ${prefix}. SPICE reads the first letter as the part type.` });
+    }
+  });
+
+  comps.forEach((c) => {
+    const def = PARTS[c.type];
+    const who = def.virtual ? `A ${def.name.toLowerCase()}` : c.label;
+    def.fields.forEach((f) => {
       if (f.k === "ic" || f.k === "ac") return;
-      if (!String(c[f.k] ?? "").trim()) {
-        msgs.push({ level: "error", text: `${c.label} has no ${f.label.toLowerCase()}.` });
+      const v = String(c[f.k] ?? "").trim();
+      if (!v) {
+        msgs.push({ level: "error", text: `${who} has no ${f.label.toLowerCase()}.` });
+        return;
+      }
+      if (f.options) return;
+      // "1 k" is two tokens to SPICE: the value 1 and a model called k.
+      if (["R", "C", "L"].includes(c.type) && /\s/.test(v)) {
+        msgs.push({ level: "error", text: `${c.label} is "${v}". Take out the space: SPICE reads "${v.split(/\s+/)[0]}" as the value and the rest as something else.` });
+      }
+      if ((f.k === "name") && !/^[A-Za-z0-9_]+$/.test(v)) {
+        msgs.push({ level: "warn", text: `The name "${v}" has characters SPICE cannot use in a node name. Stick to letters, digits and _.` });
       }
     });
   });
 
-  net.labelClashes.forEach((c) => {
-    if (c.kind === "two-names") {
-      msgs.push({ level: "error", text: `The same node is labelled both ${c.a} and ${c.b}. A node can only have one name.` });
-    } else {
-      msgs.push({ level: "error", text: `The name ${c.a} is used on two different nodes. Net names have to be unique.` });
-    }
-  });
-  net.groundLabels.forEach((name) => {
-    msgs.push({ level: "warn", text: `The label ${name} sits on the ground net, which is always node 0 and cannot be renamed.` });
-  });
-  comps.filter((c) => c.type === "NET").forEach((c) => {
-    const name = String(c.netname || "").trim();
-    if (name && !/^[A-Za-z][A-Za-z0-9_]*$/.test(name)) {
-      msgs.push({ level: "error", text: `${name} is not a usable net name. Start with a letter and use only letters, digits and underscore — no spaces.` });
+  // A part with both ends on one node does nothing: it has been wired out.
+  parts.forEach((c) => {
+    const nodes = nodesFor(c, net);
+    if (nodes.length === 2 && nodes[0] !== undefined && nodes[0] === nodes[1]) {
+      msgs.push({ level: "warn", text: `${c.label} has both ends on the same node, so it is shorted out. Look for a wire running across it.` });
     }
   });
 
+  // Two parts dropped on the same spot hide each other.
+  for (let i = 0; i < parts.length; i++) {
+    for (let j = i + 1; j < parts.length; j++) {
+      const a = parts[i], b = parts[j];
+      if (a.x === b.x && a.y === b.y && (a.rot || 0) === (b.rot || 0)) {
+        msgs.push({ level: "warn", text: `${a.label} and ${b.label} are drawn on top of each other. Drag one aside to see both.` });
+      } else {
+        const ba = boxOf(a, -6), bb = boxOf(b, -6);
+        const overlap = ba.x0 < bb.x1 && bb.x0 < ba.x1 && ba.y0 < bb.y1 && bb.y0 < ba.y1;
+        if (overlap && a.type === b.type) {
+          msgs.push({ level: "warn", text: `${a.label} and ${b.label} overlap on the sheet.` });
+        }
+      }
+    }
+  }
+
+  (net.conflicts || []).forEach((names) => {
+    msgs.push({ level: "warn", text: `One node carries several names: ${names.join(", ")}. It is called ${spiceNodeName(names[0])} in the netlist.` });
+  });
+
+  comps.forEach((c) => {
+    if (!PARTS[c.type].netName) return;
+    const p = pinsOf(c)[0];
+    if ((net.degree.get(`${p.x},${p.y}`) || 0) < 2) {
+      msgs.push({ level: "warn", text: `The ${PARTS[c.type].name.toLowerCase()} ${c.name || ""} is not touching a wire or a pin, so it names nothing.` });
+    }
+  });
+
+  // {NAME} values need a PARAMETERS block that defines NAME.
+  const defined = new Set(comps.filter((c) => c.type === "PARAM").map((c) => String(c.name || "").trim().toLowerCase()));
+  comps.forEach((c) => {
+    PARTS[c.type].fields.forEach((f) => {
+      const v = String(c[f.k] ?? "");
+      for (const m of v.matchAll(/\{\s*([A-Za-z_]\w*)\s*\}/g)) {
+        if (!defined.has(m[1].toLowerCase())) {
+          msgs.push({ level: "error", text: `${c.label} uses {${m[1]}}, but no Parameter part defines ${m[1]}. Place one and name it ${m[1]}.` });
+        }
+      }
+    });
+  });
+  if (analysis.paramOn) {
+    const want = String(analysis.paramName || "").trim();
+    if (!want) msgs.push({ level: "error", text: "The parametric sweep is on but has no parameter name." });
+    else if (!defined.has(want.toLowerCase())) {
+      msgs.push({ level: "error", text: `The parametric sweep varies ${want}, but no Parameter part defines it.` });
+    } else if (!paramValues(analysis)) {
+      msgs.push({ level: "error", text: "The parametric sweep values do not make a usable list. Check start, stop and increment." });
+    }
+  }
+
   net.pinCount.forEach((n, node) => {
-    if (node !== "0" && n < 2) {
+    if (node !== 0 && n < 2) {
       msgs.push({ level: "warn", text: `Node ${node} has only one pin on it. ngspice will refuse to converge on a dangling node.` });
     }
   });
@@ -321,12 +314,41 @@ export function validate(comps, wires, net, analysis, transliterated = false) {
     }
   }
 
-  if (!msgs.length) {
-    const nodes = new Set([...net.pinNode.values()].filter((n) => n !== "0")).size;
-    msgs.push({ level: "ok", text: `Connectivity is clean. ${nodes} node${nodes === 1 ? "" : "s"} above ground, ${parts.length} part${parts.length === 1 ? "" : "s"}.` });
+  if (!msgs.length && parts.length) {
+    msgs.push({ level: "ok", text: `Connectivity is clean. ${net.count} node${net.count === 1 ? "" : "s"} above ground, ${parts.length} part${parts.length === 1 ? "" : "s"}.` });
   }
   return msgs;
 }
+
+/* ------------------------------------------------------ parametric sweep */
+
+const PARAM_RUN_LIMIT = 12;
+
+/**
+ * The values a parametric sweep steps through, or null when it is off or
+ * malformed. Capped, because every value is a separate ngspice run.
+ */
+export function paramValues(a) {
+  if (!a || !a.paramOn) return null;
+  let vals;
+  if (a.paramMode === "list") {
+    vals = String(a.paramList || "").split(/[\s,]+/).filter(Boolean).map(parseValue);
+  } else {
+    const start = parseValue(a.paramStart), stop = parseValue(a.paramStop), step = parseValue(a.paramStep);
+    if (![start, stop, step].every(isFinite) || step <= 0) return null;
+    vals = [];
+    const dir = stop >= start ? 1 : -1;
+    for (let k = 0; k <= PARAM_RUN_LIMIT; k++) {
+      const v = start + dir * k * step;
+      if ((dir > 0 && v > stop + step * 1e-9) || (dir < 0 && v < stop - step * 1e-9)) break;
+      vals.push(Number(v.toPrecision(12)));
+    }
+  }
+  if (!vals.length || vals.some((v) => !isFinite(v)) || vals.length > PARAM_RUN_LIMIT) return null;
+  return vals;
+}
+
+export { PARAM_RUN_LIMIT };
 
 /* ------------------------------------------------------ numbers and units */
 
@@ -350,7 +372,9 @@ export function formatEng(v, digits = 4) {
   const a = Math.abs(v);
   for (const [scale, suffix] of UNITS) {
     if (a >= scale) {
-      const s = (v / scale).toPrecision(digits).replace(/\.?0+$/, "");
+      // Trim zeros only after a decimal point: 100 must stay 100, not 1.
+      let s = (v / scale).toPrecision(digits);
+      if (s.includes(".") && !/e/i.test(s)) s = s.replace(/0+$/, "").replace(/\.$/, "");
       return s + suffix;
     }
   }

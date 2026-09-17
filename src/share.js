@@ -54,7 +54,8 @@ function toPayload(state) {
     q: state.seq,
     p: state.probes,
     n: state.notes,
-    a: state.analysis
+    a: state.analysis,
+    ...(state.showBias ? { b: 1 } : {})
   };
 }
 
@@ -66,7 +67,8 @@ function fromPayload(p) {
     seq: p.q || {},
     probes: p.p || [],
     notes: p.n || [],
-    analysis: p.a || {}
+    analysis: p.a || {},
+    showBias: !!p.b
   };
 }
 

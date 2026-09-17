@@ -46,6 +46,8 @@
       <button type="button" data-tool="select" aria-pressed="true">Select<kbd>S</kbd></button>
       <button type="button" data-tool="wire" aria-pressed="false">Wire<kbd>W</kbd></button>
       <button type="button" data-tool="probe" aria-pressed="false">Probe<kbd>B</kbd></button>
+      <button type="button" data-tool="vdiff" aria-pressed="false"
+              title="Differential voltage probe: click the + side, then the − side">Diff probe<kbd>X</kbd></button>
       <button type="button" data-tool="text" aria-pressed="false">Text<kbd>T</kbd></button>
     </div>
     <div class="tool-group" id="viewTools" role="group" aria-label="Navigation">
@@ -54,7 +56,6 @@
       <button type="button" id="btnLockView" class="ghost" aria-pressed="false"
               title="Stop the sheet responding to pinch-zoom and middle-drag">Lock view<kbd>L</kbd></button>
     </div>
-    <div class="tool-group" id="partTools" role="group" aria-label="Parts"></div>
     <div class="tool-group" role="group" aria-label="Edit">
       <button type="button" id="btnUndo" class="ghost" disabled>Undo<kbd>⌘Z</kbd></button>
       <button type="button" id="btnRedo" class="ghost" disabled>Redo</button>
@@ -69,6 +70,7 @@
     <div class="tool-group">
       <button type="button" id="btnHelp" class="ghost" aria-haspopup="dialog">Shortcuts<kbd>?</kbd></button>
     </div>
+    <div class="tool-group" id="partTools" role="group" aria-label="Parts"></div>
   </div>
 </div>
 
@@ -80,7 +82,8 @@
     <h2 id="sheetHead">
       Schematic
       <span class="head-actions">
-        <button type="button" id="btnNodeVolts" class="ghost" aria-pressed="false" disabled>Node voltages</button>
+        <button type="button" id="btnBias" class="ghost" aria-pressed="false"
+                title="Print the operating-point voltage at every node, like PSpice's V button">Show DC voltages</button>
         <button type="button" id="btnPngSheet" class="ghost">Export PNG</button>
       </span>
     </h2>
@@ -125,11 +128,14 @@
             <option value="">Free build</option>
           </select>
         </div>
+        <p class="lab-kind" id="labKind" hidden></p>
         <p class="lab-progress" id="labProgress" hidden></p>
         <p class="muted" id="labSummary"></p>
         <ol class="task-list" id="labTasks"></ol>
+        <div class="lab-questions" id="labQuestions" hidden></div>
         <div class="btn-row">
           <button type="button" id="btnCheck" class="primary" disabled>Check my work</button>
+          <button type="button" id="btnLabReset" class="ghost" hidden>Start over</button>
         </div>
         <div id="checkResults"></div>
       </div>
@@ -186,6 +192,35 @@
           </div>
         </div>
 
+        <div class="param-box">
+          <div class="checkline">
+            <input type="checkbox" id="paramOn">
+            <label for="paramOn">Parametric sweep</label>
+          </div>
+          <div id="fieldsParam" hidden>
+            <p class="field-hint">Runs the analysis once for each value of a parameter defined by a Parameter part. Use it in a value as {NAME}.</p>
+            <div class="field-grid-2">
+              <div class="field"><label for="paramName">Parameter name</label><input type="text" id="paramName" autocomplete="off" spellcheck="false"></div>
+              <div class="field">
+                <label for="paramMode">Sweep type</label>
+                <select id="paramMode">
+                  <option value="lin">Linear</option>
+                  <option value="list">Value list</option>
+                </select>
+              </div>
+            </div>
+            <div class="field-grid-3" id="paramLin">
+              <div class="field"><label for="paramStart">Start</label><input type="text" id="paramStart"></div>
+              <div class="field"><label for="paramStop">End</label><input type="text" id="paramStop"></div>
+              <div class="field"><label for="paramStep">Increment</label><input type="text" id="paramStep"></div>
+            </div>
+            <div class="field" id="paramListWrap" hidden>
+              <label for="paramList">Values, separated by spaces</label>
+              <input type="text" id="paramList" autocomplete="off" spellcheck="false">
+            </div>
+          </div>
+        </div>
+
         <div class="btn-row">
           <button type="button" id="btnRun" class="primary">Run simulation</button>
         </div>
@@ -233,7 +268,7 @@
     <h2 id="partsHead">Parts and connections</h2>
     <div class="panel-body">
       <table class="parts-table">
-        <caption>Text equivalent of the sheet. Node 0 is ground; the other numbers come from the connectivity pass.</caption>
+        <caption>Text equivalent of the sheet. Node 0 is ground. Named nodes take their net alias; the rest are numbered by the connectivity pass.</caption>
         <thead>
           <tr>
             <th scope="col">Part</th>
@@ -263,7 +298,8 @@
         <dl class="shortcuts">
           <dt><kbd>S</kbd></dt><dd>Select</dd>
           <dt><kbd>W</kbd></dt><dd>Wire</dd>
-          <dt><kbd>B</kbd></dt><dd>Probe</dd>
+          <dt><kbd>B</kbd></dt><dd>Probe: a wire for volts, a part body for amps</dd>
+          <dt><kbd>X</kbd></dt><dd>Differential probe: + side, then − side</dd>
           <dt><kbd>T</kbd></dt><dd>Text annotation</dd>
           <dt><kbd>H</kbd></dt><dd>Pan the view</dd>
           <dt><kbd>Z</kbd></dt><dd>Zoom to an area</dd>
@@ -277,6 +313,8 @@
           <dt><kbd>D</kbd></dt><dd>Diode</dd>
           <dt><kbd>A</kbd></dt><dd>Ammeter</dd>
           <dt><kbd>G</kbd></dt><dd>Ground</dd>
+          <dt><kbd>K</kbd></dt><dd>Net alias (IN, OUT, A, B…)</dd>
+          <dt><kbd>P</kbd></dt><dd>Power symbol (VCC, VEE)</dd>
           <dt><kbd>Q</kbd> <kbd>M</kbd></dt><dd>NPN transistor, NMOS</dd>
           <dt><kbd>U</kbd></dt><dd>Op-amp</dd>
         </dl>

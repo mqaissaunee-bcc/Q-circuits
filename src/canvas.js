@@ -6,8 +6,9 @@
  * drawing code a pure function of the store.
  */
 
-import { GRID, PARTS, PALETTE, pinsOf, boxOf, shapeOf, filledIndices, textAnchor, netlistNameOf } from "./parts.js";
-import { buildNodes } from "./netlist.js";
+import { GRID, PARTS, PALETTE, pinsOf, boxOf, shapeOf, filledIndices, textAnchor, netlistNameOf, rotatePoint } from "./parts.js";
+import { buildNodes, nodeAtPoint, formatEng } from "./netlist.js";
+import { canProbeCurrent } from "./simulate.js";
 
 const NS = "http://www.w3.org/2000/svg";
 const SHEET_W = 1400, SHEET_H = 900;
@@ -49,7 +50,8 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   let lastDown = null;     // for detecting a double-click ourselves
   let caret = null;        // grid position for keyboard placement
   let viewLocked = false;  // when set, the sheet ignores wheel and middle-drag
-  let nodeVolts = null;    // node id -> formatted operating-point voltage
+  let diffStart = null;    // first point of a differential probe, while placing
+  let bias = null;         // {netlist, values: Map node -> volts} from the last .op
   const noteBoxes = new Map();  // note id -> measured bounds, for hit testing
 
   const say = (m) => onStatus?.(m);
@@ -219,6 +221,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     drawComps();
     drawNodeTags();
     drawNotes();
+    drawBias();
     drawProbes();
     drawSelection();
     drawGhosts();
@@ -268,9 +271,10 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     store.state.comps.forEach((c) => {
       const def = PARTS[c.type];
       const sel = store.selection.has(c.id);
+      const rot = def.upright ? 0 : c.rot || 0;
       const grp = el("g", {
-        transform: `translate(${c.x},${c.y}) rotate(${c.rot || 0})`,
-        class: "part" + (sel ? " is-selected" : "")
+        transform: `translate(${c.x},${c.y}) rotate(${rot})`,
+        class: "part" + (sel ? " is-selected" : "") + (def.virtual ? " is-virtual" : "")
       }, g);
       const fills = filledIndices(c.type);
       shapeOf(c).forEach((d, i) => {
@@ -279,18 +283,26 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
 
       pinsOf(c).forEach((p, i) => {
         const node = net.pinNode.get(`${c.id}:${i}`);
-        const alone = node !== 0 && (net.pinCount.get(node) || 0) < 2;
+        // A name tag is attached when anything else shares its point; a real
+        // pin is attached when another real pin shares its node.
+        const alone = def.virtual
+          ? (net.degree.get(`${p.x},${p.y}`) || 0) < 2
+          : node !== 0 && (net.pinCount.get(node) || 0) < 2;
+        if (def.virtual && !alone) return;
         el("circle", { cx: p.x, cy: p.y, r: alone ? 4.5 : 2.6, class: alone ? "pin is-open" : "pin" }, g);
       });
 
-      if (def.caption) {
-        const t = textAnchor(c);
-        const cap = el("text", {
-          x: c.x + 16, y: c.y - 16, class: "net-label",
-          "data-edit": "value", "data-id": c.id
-        }, g);
-        cap.textContent = def.caption(c) || "?";
-        void t;
+      if (def.texts) {
+        def.texts(c).forEach((t) => {
+          const [dx, dy] = def.upright ? [t.x, t.y] : rotateText(t, c.rot || 0);
+          const node = el("text", {
+            x: c.x + dx, y: c.y + dy,
+            class: t.cls || "part-value",
+            "text-anchor": def.upright ? (t.anchor || "start") : "middle",
+            "data-edit": "value", "data-id": c.id, "data-field": t.field || ""
+          }, g);
+          node.textContent = t.text;
+        });
       }
 
       if (!def.noLabel) {
@@ -312,6 +324,16 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     });
   }
 
+  /**
+   * Text on a rotatable symbol stays upright; only its anchor moves, so a
+   * power bar turned to point down carries its name underneath.
+   */
+  function rotateText(t, rot) {
+    // t.y is the text's centre; +4 turns that into a baseline for 12px type.
+    const [x, y] = rotatePoint(t.x, t.y, rot);
+    return [x, y + 4];
+  }
+
   function summarise(c) {
     const def = PARTS[c.type];
     if (def.summary) return def.summary(c);
@@ -331,25 +353,15 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     const g = el("g", { "aria-hidden": "true" }, svg);
     const shown = new Set();
     store.state.comps.forEach((c) => {
-      if (c.type === "GND" || c.type === "NET") return;
+      if (PARTS[c.type].virtual || c.type === "GND") return;
       pinsOf(c).forEach((p, i) => {
         const nd = net.pinNode.get(`${c.id}:${i}`);
-        if (nd === undefined || nd === "0" || shown.has(nd)) return;
+        // Named nodes already carry their name on an alias.
+        if (nd === undefined || nd === 0 || typeof nd === "string" || shown.has(nd)) return;
         shown.add(nd);
-        // A named node already says what it is; the number would be noise.
-        if (!/^\d+$/.test(nd)) return;
         const t = el("text", { x: p.x + 6, y: p.y - 7, class: "node-tag" }, g);
-        t.textContent = nd;
+        t.textContent = String(nd);
       });
-      if (nodeVolts) {
-        pinsOf(c).forEach((p, i) => {
-          const nd = net.pinNode.get(`${c.id}:${i}`);
-          if (nd === undefined || !nodeVolts.has(nd) || shown.has(`v${nd}`)) return;
-          shown.add(`v${nd}`);
-          const t = el("text", { x: p.x + 6, y: p.y + 16, class: "node-volt" }, g);
-          t.textContent = nodeVolts.get(nd);
-        });
-      }
     });
   }
 
@@ -386,6 +398,15 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
         el("circle", { cx: pr.x, cy: pr.y, r: 6, class: cls }, g);
         const t = el("text", { x: pr.x + 9, y: pr.y + 14, class: "probe-label" }, g);
         t.textContent = probeName(pr);
+      } else if (pr.kind === "vd") {
+        const cls = `probe probe-${i % 6}`;
+        [[pr.x, pr.y, "+"], [pr.x2, pr.y2, "\u2212"]].forEach(([x, y, sign]) => {
+          el("circle", { cx: x, cy: y, r: 6, class: cls }, g);
+          const s2 = el("text", { x, y: y + 3.5, class: "probe-sign", "text-anchor": "middle" }, g);
+          s2.textContent = sign;
+        });
+        const t = el("text", { x: pr.x + 9, y: pr.y + 14, class: "probe-label" }, g);
+        t.textContent = probeName(pr);
       } else {
         const c = store.state.comps.find((k) => netlistNameOf(k) === pr.ref);
         if (!c) return;
@@ -400,8 +421,62 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
 
   function probeName(pr) {
     if (pr.kind === "i") return `i(${pr.ref.toLowerCase()})`;
-    const nd = net.coordNode.get(`${pr.x},${pr.y}`);
+    if (pr.kind === "vd") {
+      const a = nodeAtPoint(net, store.state.wires, pr.x, pr.y);
+      const b = nodeAtPoint(net, store.state.wires, pr.x2, pr.y2);
+      return `v(${a ?? "?"},${b ?? "?"})`;
+    }
+    const nd = nodeAtPoint(net, store.state.wires, pr.x, pr.y);
     return nd === undefined ? "v(?)" : `v(${nd})`;
+  }
+
+  /**
+   * Operating-point voltages printed at each node, the way PSpice's V button
+   * does. Only drawn while the sheet still matches the run that produced them.
+   */
+  function drawBias() {
+    if (!store.state.showBias || !bias) return;
+    if (bias.signature !== signature()) return;
+    const g = el("g", { class: "bias-layer", "aria-hidden": "true" }, svg);
+    // Prefer wire corners, which are usually clear of part text; fall back to
+    // a ground symbol for node 0, then to any pin.
+    const spot = new Map();
+    const pinAt = new Set();
+    store.state.comps.forEach((c) => pinsOf(c).forEach((p) => pinAt.add(`${p.x},${p.y}`)));
+    store.state.wires.forEach((w) => {
+      [[w.x1, w.y1], [w.x2, w.y2]].forEach(([x, y]) => {
+        const k = `${x},${y}`;
+        const nd = net.coordNode.get(k);
+        if (nd === undefined || spot.has(nd) || pinAt.has(k) || nd === 0) return;
+        spot.set(nd, { nd, x, y });
+      });
+    });
+    store.state.comps.forEach((c) => {
+      if (c.type !== "GND" || spot.has(0)) return;
+      spot.set(0, { nd: 0, x: c.x + 10, y: c.y + 26 });
+    });
+    store.state.comps.forEach((c) => {
+      if (PARTS[c.type].virtual) return;
+      pinsOf(c).forEach((p, i) => {
+        const nd = net.pinNode.get(`${c.id}:${i}`);
+        if (nd === undefined || spot.has(nd)) return;
+        spot.set(nd, { nd, x: p.x, y: p.y });
+      });
+    });
+    const spots = [...spot.values()];
+    spots.forEach(({ nd, x, y }) => {
+      const v = nd === 0 ? 0 : bias.values.get(String(nd).toLowerCase());
+      if (v === undefined || !isFinite(v)) return;
+      const text = `${formatEng(v, 4)}V`;
+      const w = text.length * 7 + 8;
+      el("rect", { x: x + 5, y: y - 24, width: w, height: 16, rx: 2, class: "bias-tag" }, g);
+      const t = el("text", { x: x + 9, y: y - 12, class: "bias-text" }, g);
+      t.textContent = text;
+    });
+  }
+
+  function signature() {
+    return JSON.stringify([store.state.comps, store.state.wires]);
   }
 
   function drawSelection() {
@@ -437,12 +512,17 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     if (PARTS[tool] && hover) {
       const grp = el("g", { transform: `translate(${hover.x},${hover.y})`, class: "ghost" }, svg);
       const fake = { type: tool, rot: ghostRot, ...defaultsFor(tool) };
-      grp.setAttribute("transform", `translate(${hover.x},${hover.y}) rotate(${ghostRot})`);
+      grp.setAttribute("transform", `translate(${hover.x},${hover.y}) rotate(${PARTS[tool].upright ? 0 : ghostRot})`);
       shapeOf(fake).forEach((d) => el("path", { d, class: "part-path" }, grp));
     }
-    if (tool === "probe" && hover) {
+    if ((tool === "probe" || tool === "vdiff") && hover) {
       const t = probeTargetAt(hover);
       if (t) el("circle", { cx: t.x, cy: t.y, r: 6, class: "probe probe-ghost" }, svg);
+    }
+    if (tool === "vdiff" && diffStart) {
+      el("circle", { cx: diffStart.x, cy: diffStart.y, r: 6, class: "probe probe-0" }, svg);
+      const s2 = el("text", { x: diffStart.x, y: diffStart.y + 3.5, class: "probe-sign", "text-anchor": "middle" }, svg);
+      s2.textContent = "+";
     }
   }
 
@@ -520,12 +600,33 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       } else {
         const hit = hitAt(p);
         const c = hit?.kind === "comp" ? store.comp(hit.id) : null;
-        if (c && (c.type === "V" || c.type === "L" || c.type === "AM")) {
+        if (c && canProbeCurrent(c)) {
           const added = store.toggleProbe("i", netlistNameOf(c), {});
           say(added ? `Current probe added on ${c.label}.` : "Current probe removed.");
         } else {
-          say("Click a wire or a pin for a voltage probe, or an ammeter, voltage source or inductor for a current probe.");
+          say("Click a wire or a pin for a voltage probe, or the body of a resistor, capacitor, diode, source, inductor or ammeter for a current probe.");
         }
+      }
+      render();
+      return;
+    }
+
+    if (tool === "vdiff") {
+      const target = probeTargetAt(p);
+      if (!target) {
+        say("Click a wire or a pin. The first click is the + side, the second the − side.");
+      } else if (!diffStart) {
+        diffStart = target;
+        say(`+ side set at ${probeName({ kind: "v", ...target })}. Click the − side.`);
+      } else if (diffStart.x === target.x && diffStart.y === target.y) {
+        diffStart = null;
+        say("Both ends were the same point. Start again with the + side.");
+      } else {
+        const ref = `${diffStart.x},${diffStart.y}|${target.x},${target.y}`;
+        const added = store.toggleProbe("vd", ref, { x: diffStart.x, y: diffStart.y, x2: target.x, y2: target.y });
+        diffStart = null;
+        const pr = store.state.probes.find((q) => q.ref === ref);
+        say(added ? `Differential probe added: ${probeName(pr)}.` : "Differential probe removed.");
       }
       render();
       return;
@@ -547,15 +648,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     }
 
     if (PARTS[tool]) {
-      let placed;
-      store.edit(() => {
-        placed = store.addComp(tool, sp.x, sp.y, PARTS[tool].prefix);
-        placed.rot = ghostRot;
-      }, "place");
-      store.selection = new Set([placed.id]);
-      onSelectionChange?.();
-      say(`${placed.label} placed at ${sp.x}, ${sp.y}.`);
-      render();
+      placeAt(sp);
       return;
     }
 
@@ -777,12 +870,20 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       let placed;
       store.edit(() => {
         placed = store.addComp(tool, sp.x, sp.y, PARTS[tool].prefix);
-        placed.rot = ghostRot;
+        placed.rot = PARTS[tool].upright ? 0 : ghostRot;
       }, "place");
       store.selection = new Set([placed.id]);
       onSelectionChange?.();
       render();
-      say(`${placed.label} placed at ${sp.x}, ${sp.y}.`);
+      const def = PARTS[tool];
+      if (def.netName || def.key === "PARAM") {
+        // A name tag is useless until it has a name, so ask for one now.
+        const anchor = svg.querySelector(`[data-edit="value"][data-id="${placed.id}"]`);
+        if (anchor) beginInlineEdit(placed, "value", anchor);
+        say(`${def.name} placed. Type its name, then press Enter.`);
+      } else {
+        say(`${placed.label} placed at ${sp.x}, ${sp.y}.`);
+      }
       return placed;
     }
     if (tool === "wire") {
@@ -899,7 +1000,9 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   }
 
   function beginInlineEdit(comp, which, anchorEl) {
-    const field = which === "label" ? null : inlineField(comp);
+    const named = anchorEl?.getAttribute?.("data-field");
+    const field = which === "label" ? null
+      : (named && PARTS[comp.type].fields.find((f) => f.k === named)) || inlineField(comp);
     if (which !== "label" && !field) {
       onNeedsInspector?.(comp);
       return;
@@ -909,6 +1012,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       value: which === "label" ? comp.label : (comp[field.k] ?? ""),
       label: which === "label"
         ? `Reference designator for ${comp.label}`
+        : PARTS[comp.type].virtual ? `${PARTS[comp.type].name}: ${field.label.toLowerCase()}`
         : `${field.label} for ${comp.label}`,
       commit: (next) => {
         if (!next) { render(); return; }
@@ -916,7 +1020,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
           if (which === "label") comp.label = next;
           else comp[field.k] = next;
         }, "inline-edit");
-        say(`${comp.label} set to ${next}.`);
+        say(`${PARTS[comp.type].virtual ? PARTS[comp.type].name : comp.label} set to ${next}.`);
       }
     });
   }
@@ -941,15 +1045,6 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     fit,
     isEditing: () => !!editing,
     contentBox,
-
-    /** Show operating-point voltages beside the nodes, the way a bench meter
-     *  reading gets written onto a schematic. Pass null to clear them. */
-    setNodeVoltages(map) {
-      nodeVolts = map && map.size ? map : null;
-      render();
-      return !!nodeVolts;
-    },
-    hasNodeVoltages: () => !!nodeVolts,
 
     /** Freeze the accidental view gestures: wheel zoom and middle-drag pan. */
     setViewLocked(locked) {
@@ -982,8 +1077,9 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     setTool(t) {
       tool = t;
       wireRun = null;
+      diffStart = null;
       svg.classList.toggle("mode-select", t === "select");
-      svg.classList.toggle("mode-probe", t === "probe");
+      svg.classList.toggle("mode-probe", t === "probe" || t === "vdiff");
       svg.classList.toggle("mode-pan", t === "pan");
       svg.classList.toggle("mode-zoom", t === "zoomrect");
       svg.classList.toggle("mode-text", t === "text");
@@ -996,9 +1092,17 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     },
     cancel() {
       wireRun = null;
+      diffStart = null;
       gesture = null;
       render();
     },
+
+    /** Operating-point node voltages to print when showBias is on. */
+    setBias(values) {
+      bias = values ? { values, signature: signature() } : null;
+      render();
+    },
+    hasBias: () => !!bias && bias.signature === signature(),
     lastNet: () => net
   };
 }

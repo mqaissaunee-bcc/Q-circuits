@@ -14,6 +14,8 @@ const LEGACY_STORAGE_KEY = "spice-lab-v1";     // autosave from before the renam
 const DOC_FORMAT = "q-circuits-circuit";
 const LIBRARY_KEY = "q-circuits-library-v1";
 const PROGRESS_KEY = "q-circuits-progress-v1";
+const LABWORK_KEY = "q-circuits-labwork-v1";
+const CURRENT_LAB_KEY = "q-circuits-current-lab-v1";
 const LEGACY_DOC_FORMATS = new Set([DOC_FORMAT, "spice-lab-circuit"]);
 const HISTORY_LIMIT = 60;
 
@@ -21,7 +23,10 @@ export const DEFAULT_ANALYSIS = {
   type: "tran",
   dcSrc: "V1", dcStart: "0", dcStop: "10", dcStep: "0.05",
   trStep: "10u", trStop: "5m", trUic: false,
-  acPts: "25", acStart: "10", acStop: "1meg"
+  acPts: "25", acStart: "10", acStop: "1meg",
+  // Parametric sweep: a series of runs with one .param changed each time.
+  paramOn: false, paramName: "", paramMode: "lin",
+  paramStart: "", paramStop: "", paramStep: "", paramList: ""
 };
 
 export class Store {
@@ -32,8 +37,10 @@ export class Store {
       wires: [],
       seq: {},
       analysis: { ...DEFAULT_ANALYSIS },
-      probes: [],          // [{kind:'v'|'i', node, label}]
-      notes: []            // free text on the sheet; never reaches the netlist
+      probes: [],          // [{kind:'v'|'vd'|'i', ref, x, y, x2?, y2?}]
+      notes: [],           // free text on the sheet; never reaches the netlist
+      answers: {},         // lab question id -> what the student typed
+      showBias: false      // print operating-point voltages on the sheet
     };
     this.selection = new Set();   // ids of comps and wires
     this.uid = 1;
@@ -328,6 +335,7 @@ export class Store {
   clear() {
     this.edit((s) => {
       s.comps = []; s.wires = []; s.seq = {}; s.probes = []; s.notes = [];
+      s.answers = {}; s.showBias = false;
       s.title = "Untitled circuit";
     }, "clear");
     this.selection.clear();
@@ -424,6 +432,56 @@ export class Store {
 
   labPassed(labId) { return !!this.readProgress()[labId]?.passed; }
 
+  /* ---------------------------------------------------------- lab work */
+
+  /**
+   * Each lab keeps its own sheet, so moving between labs never costs work.
+   * Stored as a document, the same shape a Save download has.
+   */
+  readLabWork() {
+    try {
+      const raw = localStorage.getItem(LABWORK_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch { return {}; }
+  }
+
+  saveLabWork(labId) {
+    if (!labId) return false;
+    const all = this.readLabWork();
+    all[labId] = { savedAt: new Date().toISOString(), doc: JSON.parse(this.toDocument()) };
+    try { localStorage.setItem(LABWORK_KEY, JSON.stringify(all)); return true; } catch { return false; }
+  }
+
+  hasLabWork(labId) { return !!this.readLabWork()[labId]; }
+
+  labWorkDoc(labId) { return this.readLabWork()[labId]?.doc || null; }
+
+  /** Open a lab's saved sheet. False if there is none. */
+  openLabWork(labId) {
+    const doc = this.labWorkDoc(labId);
+    if (!doc) return false;
+    this.loadDocument(JSON.stringify(doc));
+    return true;
+  }
+
+  forgetLabWork(labId) {
+    const all = this.readLabWork();
+    delete all[labId];
+    try { localStorage.setItem(LABWORK_KEY, JSON.stringify(all)); } catch { /* storage blocked */ }
+  }
+
+  get currentLabId() {
+    try { return localStorage.getItem(CURRENT_LAB_KEY) || ""; } catch { return ""; }
+  }
+
+  set currentLabId(id) {
+    try {
+      if (id) localStorage.setItem(CURRENT_LAB_KEY, id);
+      else localStorage.removeItem(CURRENT_LAB_KEY);
+    } catch { /* storage blocked */ }
+  }
+
   clearProgress() {
     try { localStorage.removeItem(PROGRESS_KEY); } catch { /* storage blocked */ }
   }
@@ -446,6 +504,8 @@ export class Store {
       this.state.analysis = { ...DEFAULT_ANALYSIS, ...(parsed.state.analysis || {}) };
       this.state.probes = parsed.state.probes || [];
       this.state.notes = parsed.state.notes || [];
+      this.state.answers = parsed.state.answers || {};
+      this.state.showBias = !!parsed.state.showBias;
       this.uid = parsed.uid || 1;
       this.markClean();
       return true;
@@ -473,6 +533,8 @@ export class Store {
       s.seq = doc.seq || {};
       s.probes = doc.probes || [];
       s.notes = doc.notes || [];
+      s.answers = doc.answers || {};
+      s.showBias = !!doc.showBias;
       s.analysis = { ...DEFAULT_ANALYSIS, ...(doc.analysis || {}) };
     }, "open");
     this.selection.clear();
@@ -491,6 +553,8 @@ export class Store {
       s.seq = { ...(circuit.seq || {}) };
       s.probes = circuit.probes ? JSON.parse(JSON.stringify(circuit.probes)) : [];
       s.notes = (circuit.notes || []).map((n) => ({ ...n, id: this.uid++ }));
+      s.answers = {};
+      s.showBias = false;
       s.analysis = { ...DEFAULT_ANALYSIS, ...(circuit.analysis || {}) };
     }, "load");
     this.selection.clear();

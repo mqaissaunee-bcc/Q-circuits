@@ -6,8 +6,6 @@
  * page load. Everything runs in this tab: no circuit ever leaves the browser.
  */
 
-import { toAscii } from "./netlist.js";
-
 let simPromise = null;
 let sim = null;
 
@@ -63,9 +61,7 @@ export async function runNetlist(netlist, onProgress) {
   const s = await startEngine(onProgress);
   onProgress?.("Simulating…");
 
-  // Belt and braces: a non-ASCII byte hangs the engine outright, so nothing
-  // reaches it unsanitised even if a caller built the deck by hand.
-  s.setNetList(toAscii(netlist));
+  s.setNetList(netlist);
   let result;
   try {
     result = await s.runSim();
@@ -91,14 +87,15 @@ export async function runNetlist(netlist, onProgress) {
       return;
     }
     if (complex) {
-      const mag = [], db = [], phase = [];
+      const mag = [], db = [], phase = [], re = [], im = [];
       for (const z of v.values) {
+        re.push(z.real); im.push(z.img);
         const m = Math.hypot(z.real, z.img);
         mag.push(m);
         db.push(20 * Math.log10(m > 0 ? m : Number.MIN_VALUE));
         phase.push((Math.atan2(z.img, z.real) * 180) / Math.PI);
       }
-      traces.push({ name: v.name, type: v.type, complex: true, mag, db, phase, values: mag });
+      traces.push({ name: v.name, type: v.type, complex: true, re, im, mag, db, phase, values: mag });
     } else {
       traces.push({ name: v.name, type: v.type, complex: false, values: v.values.slice() });
     }

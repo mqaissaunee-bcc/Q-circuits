@@ -7,12 +7,13 @@
  */
 
 import { PARTS, PALETTE, pinsOf, netlistNameOf } from "./parts.js";
-import { buildNodes, buildNetlist, nodesFor, validate, formatEng, blockingFaults } from "./netlist.js";
+import { buildNodes, nodesFor, validate, formatEng, paramValues } from "./netlist.js";
 import { Store, DEFAULT_ANALYSIS } from "./store.js";
 import { createCanvas } from "./canvas.js";
 import { createScope } from "./scope.js";
 import { runNetlist, engineReady } from "./engine.js";
-import { LABS, labById, runChecks } from "./labs.js";
+import { LABS, LAB_GROUPS, LAB_KINDS, labById, runChecks, corners } from "./labs.js";
+import { simulate, probedTraces, previewNetlist } from "./simulate.js";
 import { explainEngineError } from "./errors.js";
 import { shareUrl, decodeCircuit, clearHash } from "./share.js";
 import { exportSvg, exportCanvas } from "./export-png.js";
@@ -43,8 +44,6 @@ const scope = createScope({ host: $("scopeHost"), measureHost: $("measureHost"),
 
 let currentLab = null;
 let lastResult = null;
-let lastVoltages = new Map();
-let lastTransliterated = false;
 let running = false;
 
 /**
@@ -78,7 +77,8 @@ function shortName(def) {
     Switch: "SW", Ammeter: "Ammeter", Ground: "GND",
     "NPN transistor": "NPN", "PNP transistor": "PNP",
     "N-channel MOSFET": "NMOS", "P-channel MOSFET": "PMOS",
-    "Op-amp": "Op-amp"
+    "Op-amp": "Op-amp", "LM324 op-amp": "LM324",
+    "Net alias": "Net alias", "Power symbol": "Power", Parameter: "Param"
   };
   return map[def.name] || def.name;
 }
@@ -155,7 +155,8 @@ helpDialog.addEventListener("click", (evt) => { if (evt.target === helpDialog) c
 const TOOL_KEYS = {
   s: "select", w: "wire", b: "probe", r: "R", c: "C", n: "L",
   v: "V", i: "I", d: "D", g: "GND", q: "NPN", m: "NMOS", u: "OPAMP",
-  a: "AM", h: "pan", z: "zoomrect", t: "text"
+  a: "AM", h: "pan", z: "zoomrect", t: "text",
+  k: "NET", p: "PWR", x: "vdiff"
 };
 
 document.addEventListener("keydown", (evt) => {
@@ -400,7 +401,8 @@ function cell(text, cls) {
 
 /* ------------------------------------------------------------- analysis */
 
-const ANA_FIELDS = ["dcSrc", "dcStart", "dcStop", "dcStep", "trStep", "trStop", "acPts", "acStart", "acStop"];
+const ANA_FIELDS = ["dcSrc", "dcStart", "dcStop", "dcStep", "trStep", "trStop", "acPts", "acStart", "acStop",
+  "paramName", "paramStart", "paramStop", "paramStep", "paramList"];
 
 function syncAnalysisInputs() {
   const a = store.state.analysis;
@@ -410,7 +412,21 @@ function syncAnalysisInputs() {
   $("fieldsDC").hidden = a.type !== "dc";
   $("fieldsTran").hidden = a.type !== "tran";
   $("fieldsAC").hidden = a.type !== "ac";
+  $("paramOn").checked = !!a.paramOn;
+  $("paramMode").value = a.paramMode || "lin";
+  $("fieldsParam").hidden = !a.paramOn;
+  $("paramLin").hidden = a.paramMode === "list";
+  $("paramListWrap").hidden = a.paramMode !== "list";
 }
+
+$("paramOn").addEventListener("change", () => {
+  store.edit((s) => { s.analysis.paramOn = $("paramOn").checked; }, "analysis");
+  syncAnalysisInputs();
+});
+$("paramMode").addEventListener("change", () => {
+  store.edit((s) => { s.analysis.paramMode = $("paramMode").value; }, "analysis");
+  syncAnalysisInputs();
+});
 
 $("anaType").addEventListener("change", () => {
   store.edit((s) => { s.analysis.type = $("anaType").value; }, "analysis");
@@ -442,20 +458,11 @@ async function run() {
   const progress = (m) => { note.textContent = m; say(m); };
 
   try {
-    const { text, net } = buildNetlist(store.state.comps, store.state.wires, store.state.analysis, store.state.title);
-
-    const blocking = blockingFaults(store.state.comps, net);
-    if (blocking.length) {
-      showBlockingFaults(blocking);
-      note.textContent = "The circuit was not sent to the simulator.";
-      say("The circuit has a fault that would hang the simulator. See the message under the Run button.");
-      return;
-    }
-
-    const result = await runNetlist(text, progress);
+    const result = await simulate(store.state, progress);
     lastResult = result;
     applyResult(result);
-    note.textContent = `${result.numPoints} point${result.numPoints === 1 ? "" : "s"} · ${result.traces.length} vector${result.traces.length === 1 ? "" : "s"}.`;
+    const runs = result.steps ? ` · ${result.steps.length} parametric runs` : "";
+    note.textContent = `${result.numPoints} point${result.numPoints === 1 ? "" : "s"} · ${result.traces.length} vector${result.traces.length === 1 ? "" : "s"}${runs}.`;
     say(`Simulation finished with ${result.numPoints} points.`);
   } catch (e) {
     showRunError(e.message || String(e), $("netOut").value);
@@ -468,7 +475,7 @@ async function run() {
 }
 
 function applyResult(result) {
-  const filtered = filterToProbes(result);
+  const filtered = probedTraces(result, store.state);
   scope.setResult(filtered);
   $("btnCsv").disabled = false;
   $("btnPngPlot").disabled = false;
@@ -478,62 +485,41 @@ function applyResult(result) {
   if (!modes.hidden) setAcMode(scope.getMode());
 
   renderOpResults(result);
-
-  const volts = nodeVoltageMap(result);
-  const btn = $("btnNodeVolts");
-  btn.disabled = volts.size === 0;
-  if (volts.size === 0) {
-    canvas.setNodeVoltages(null);
-    btn.setAttribute("aria-pressed", "false");
-  } else if (btn.getAttribute("aria-pressed") === "true") {
-    canvas.setNodeVoltages(volts);
-  }
-  lastVoltages = volts;
+  updateBias(result);
 }
 
-/** When probes are placed, show only what was probed. */
-function filterToProbes(result) {
-  const probes = store.state.probes;
-  if (!probes.length) return result;
-  const net = buildNodes(store.state.comps, store.state.wires);
-  const wanted = new Set();
-  probes.forEach((p) => {
-    if (p.kind === "v") {
-      const nd = net.coordNode.get(`${p.x},${p.y}`);
-      if (nd !== undefined) wanted.add(`v(${nd})`);
-    } else {
-      wanted.add(`i(${p.ref.toLowerCase()})`);
-    }
-  });
-  const traces = result.traces.filter((t) => wanted.has(t.name.toLowerCase()));
-  return traces.length ? { ...result, traces } : result;
-}
-
-/**
- * Operating-point voltages, keyed by node id, for annotating the sheet.
- * Only meaningful for a run with no sweep — a waveform has no single value.
- */
-function nodeVoltageMap(result) {
-  const map = new Map();
-  if (!result || result.sweep) return map;
+/** Hand operating-point voltages to the sheet, for Show DC voltages. */
+function updateBias(result) {
+  if (!result || result.sweep) { canvas.setBias(null); syncBiasButton(); return; }
+  const values = new Map();
   result.traces.forEach((t) => {
-    const m = t.name.match(/^v\((.+)\)$/i);
-    if (!m || t.type === "current") return;
-    map.set(m[1], `${formatEng(t.values[t.values.length - 1], 4)} V`);
+    if (result.steps && t.step !== 0) return;
+    const m = String(t.name).split(" \u00B7 ")[0].match(/^v\(([^,()]+)\)$/i);
+    if (m) values.set(m[1].toLowerCase(), t.values[t.values.length - 1]);
   });
-  // ngspice lower-cases vector names; match them back to the sheet's own ids
-  const net = cachedNet;
-  if (net) {
-    const fixed = new Map();
-    const ids = new Set([...net.pinNode.values()]);
-    map.forEach((v, k) => {
-      const match = [...ids].find((id) => String(id).toLowerCase() === k.toLowerCase());
-      fixed.set(match !== undefined ? match : k, v);
-    });
-    return fixed;
-  }
-  return map;
+  canvas.setBias(values);
+  syncBiasButton();
 }
+
+function syncBiasButton() {
+  const on = !!store.state.showBias;
+  const b = $("btnBias");
+  b.setAttribute("aria-pressed", on ? "true" : "false");
+  b.textContent = on ? "Hide DC voltages" : "Show DC voltages";
+}
+
+$("btnBias").addEventListener("click", () => {
+  const on = !store.state.showBias;
+  store.edit((s) => { s.showBias = on; }, "bias");
+  syncBiasButton();
+  if (on && !canvas.hasBias()) {
+    say(store.state.analysis.type === "op"
+      ? "Voltages will appear once you run the operating point."
+      : "Node voltages come from an operating-point run. Set the analysis to Operating point and run it.");
+  } else {
+    say(on ? "Node voltages shown on the sheet." : "Node voltages hidden.");
+  }
+});
 
 function renderOpResults(result) {
   const host = $("opResults");
@@ -566,32 +552,6 @@ function renderOpResults(result) {
   });
   table.appendChild(body);
   host.appendChild(table);
-}
-
-/** Faults refused before the engine is called, with the reason. */
-function showBlockingFaults(faults) {
-  const host = $("runError");
-  host.replaceChildren();
-  const box = document.createElement("div");
-  box.className = "engine-error";
-  box.setAttribute("role", "alert");
-
-  const h = document.createElement("h3");
-  h.textContent = faults.length === 1
-    ? "This circuit cannot be simulated yet."
-    : `This circuit cannot be simulated yet — ${faults.length} things to fix.`;
-  box.appendChild(h);
-
-  const ul = document.createElement("ul");
-  ul.style.cssText = "margin:0;padding-left:1.1rem";
-  faults.forEach((f) => {
-    const li = document.createElement("li");
-    li.textContent = f;
-    li.style.marginBottom = "var(--sp-2)";
-    ul.appendChild(li);
-  });
-  box.appendChild(ul);
-  host.appendChild(box);
 }
 
 function showRunError(message, netlist) {
@@ -651,14 +611,6 @@ $("acModes").addEventListener("click", (evt) => {
   say(`Plot showing ${b.textContent}.`);
 });
 
-$("btnNodeVolts").addEventListener("click", () => {
-  const on = $("btnNodeVolts").getAttribute("aria-pressed") === "true";
-  const next = !on;
-  $("btnNodeVolts").setAttribute("aria-pressed", next ? "true" : "false");
-  canvas.setNodeVoltages(next ? lastVoltages : null);
-  say(next ? "Node voltages shown on the schematic." : "Node voltages hidden.");
-});
-
 $("btnPngSheet").addEventListener("click", async () => {
   try {
     await exportSvg(canvas.svg, `${slug(store.state.title)}-schematic.png`, canvas.contentBox());
@@ -690,22 +642,29 @@ $("btnCsv").addEventListener("click", () => {
 
 const labSelect = $("labSelect");
 
-/** Rebuild the lab list, ticking the ones already passed. */
+/** Rebuild the lab list, grouped, ticking the ones already passed. */
 function renderLabList() {
-  const keep = labSelect.value;
+  const keep = currentLab ? currentLab.id : "";
   labSelect.replaceChildren();
   const free = document.createElement("option");
   free.value = ""; free.textContent = "Free build";
   labSelect.appendChild(free);
 
   let passed = 0;
-  LABS.forEach((l) => {
-    const done = store.labPassed(l.id);
-    if (done) passed++;
-    const o = document.createElement("option");
-    o.value = l.id;
-    o.textContent = done ? `${l.title}  \u2713` : l.title;
-    labSelect.appendChild(o);
+  LAB_GROUPS.forEach((g) => {
+    const labs = LABS.filter((l) => l.group === g.id);
+    if (!labs.length) return;
+    const og = document.createElement("optgroup");
+    og.label = g.title;
+    labs.forEach((l) => {
+      const done = store.labPassed(l.id);
+      if (done) passed++;
+      const o = document.createElement("option");
+      o.value = l.id;
+      o.textContent = done ? `${l.title}  \u2713` : l.title;
+      og.appendChild(o);
+    });
+    labSelect.appendChild(og);
   });
   labSelect.value = keep;
 
@@ -714,34 +673,90 @@ function renderLabList() {
 }
 renderLabList();
 
+/**
+ * Put a lab on the sheet: the student's own saved attempt if there is one,
+ * otherwise the starting circuit, offering to carry an earlier lab forward.
+ */
+function openLab(lab) {
+  if (store.openLabWork(lab.id)) {
+    say(`${lab.title}: your work so far is back on the sheet.`);
+    return;
+  }
+  const from = lab.carryFrom && store.labWorkDoc(lab.carryFrom);
+  const fromLab = lab.carryFrom && labById(lab.carryFrom);
+  if (from && confirm(`Start ${lab.title} from your ${fromLab.title.split(" · ")[0]} circuit?\n\nOK copies that circuit and its analysis settings onto this lab's sheet. Cancel starts blank.`)) {
+    store.loadCircuit({
+      ...from,
+      comps: from.comps.map(({ id, ...rest }) => rest),
+      wires: (from.wires || []).map(({ id, ...rest }) => rest),
+      notes: [],
+      probes: []
+    });
+    say(`${lab.title}: started from your ${fromLab.title.split(" · ")[0]} circuit. Probes were not copied.`);
+    return;
+  }
+  store.loadCircuit(lab.circuit);
+  say(`${lab.title} loaded.`);
+}
+
+function setLab(lab) {
+  currentLab = lab;
+  store.currentLabId = lab ? lab.id : "";
+  $("checkResults").replaceChildren();
+  if (!lab) { clearLabPanel(); return; }
+  renderLabPanel(lab);
+}
+
 labSelect.addEventListener("change", () => {
   const lab = labById(labSelect.value);
 
-  if (lab && !confirmReplace(`Opening the ${lab.title} lab`)) {
-    labSelect.value = currentLab ? currentLab.id : "";
+  // Work in a lab is kept for that lab, so only free-build work needs a warning.
+  if (currentLab) store.saveLabWork(currentLab.id);
+  else if (lab && !confirmReplace(`Opening the ${lab.title} lab`)) {
+    labSelect.value = "";
     return;
   }
-
-  currentLab = lab;
-  $("checkResults").replaceChildren();
 
   if (!lab) {
-    $("labSummary").textContent = "";
-    $("labTasks").replaceChildren();
-    $("labProgress").hidden = true;
-    $("btnCheck").disabled = true;
-    say("Free build mode.");
+    setLab(null);
+    say("Free build mode. Your lab work is kept; pick the lab again to return to it.");
     return;
   }
 
-  store.loadCircuit(lab.circuit);
+  openLab(lab);
   syncAnalysisInputs();
+  syncBiasButton();
+  canvas.setBias(null);
   canvas.fit();
-  renderLabPanel(lab);
-  say(`${lab.title} loaded.`);
+  setLab(lab);
 });
 
-/** Fill the lab panel with a lab's brief and tasks. */
+$("btnLabReset").addEventListener("click", () => {
+  if (!currentLab) return;
+  if (!confirm(`Start ${currentLab.title} over?\n\nYour work on this lab is replaced by the starting circuit. Your pass mark, if you have one, is kept.`)) return;
+  store.forgetLabWork(currentLab.id);
+  openLab(currentLab);
+  store.saveLabWork(currentLab.id);
+  syncAnalysisInputs();
+  syncBiasButton();
+  canvas.setBias(null);
+  canvas.fit();
+  renderLabPanel(currentLab);
+  $("checkResults").replaceChildren();
+});
+
+function clearLabPanel() {
+  $("labSummary").textContent = "";
+  $("labTasks").replaceChildren();
+  $("labQuestions").replaceChildren();
+  $("labQuestions").hidden = true;
+  $("labProgress").hidden = true;
+  $("labKind").hidden = true;
+  $("btnCheck").disabled = true;
+  $("btnLabReset").hidden = true;
+}
+
+/** Fill the lab panel with a lab's brief, tasks and questions. */
 function renderLabPanel(lab) {
   const done = store.labPassed(lab.id);
   const banner = $("labProgress");
@@ -752,6 +767,11 @@ function renderLabPanel(lab) {
       ? `\u2713 Passed on ${new Date(at).toLocaleDateString(undefined, { month: "long", day: "numeric" })}`
       : "\u2713 Passed";
   }
+  const kind = $("labKind");
+  kind.hidden = false;
+  kind.textContent = LAB_KINDS[lab.kind] || "";
+  kind.dataset.kind = lab.kind;
+
   $("labSummary").textContent = lab.summary;
   const ol = $("labTasks");
   ol.replaceChildren();
@@ -760,7 +780,31 @@ function renderLabPanel(lab) {
     li.textContent = t;
     ol.appendChild(li);
   });
+  renderQuestions(lab);
   $("btnCheck").disabled = false;
+  $("btnLabReset").hidden = false;
+}
+
+function renderQuestions(lab) {
+  const host = $("labQuestions");
+  host.replaceChildren();
+  const qs = lab.questions || [];
+  host.hidden = !qs.length;
+  if (!qs.length) return;
+  const h = document.createElement("h3");
+  h.textContent = "Your readings";
+  host.appendChild(h);
+  const hint = document.createElement("p");
+  hint.className = "field-hint";
+  hint.textContent = "Numbers only. SPICE suffixes work: 4.2m, 17.9k.";
+  host.appendChild(hint);
+  qs.forEach((q) => {
+    host.appendChild(field(q.prompt, "text", store.state.answers?.[q.id] ?? "", (v) => {
+      store.state.answers = { ...(store.state.answers || {}), [q.id]: v };
+      store.save();
+      if (currentLab) store.saveLabWork(currentLab.id);
+    }));
+  });
 }
 
 $("btnCheck").addEventListener("click", async () => {
@@ -770,19 +814,18 @@ $("btnCheck").addEventListener("click", async () => {
   btn.disabled = true;
   const host = $("checkResults");
   host.replaceChildren();
+  $("runError").replaceChildren();
 
   const note = $("engineNote");
+  // Answers typed in the last moment may still be in the debounce.
+  document.activeElement?.blur?.();
+  await new Promise((r) => setTimeout(r, 200));
   const outcome = await runChecks(currentLab, store, (m) => { note.textContent = m; say(m); });
 
   running = false;
   btn.disabled = false;
 
-  if (outcome.error) {
-    showRunError(outcome.error, $("netOut").value);
-    say("The check could not run because the simulation did not finish.");
-    return;
-  }
-
+  if (outcome.error) showRunError(outcome.error, $("netOut").value);
   if (outcome.result) {
     lastResult = outcome.result;
     applyResult(outcome.result);
@@ -792,7 +835,7 @@ $("btnCheck").addEventListener("click", async () => {
   ul.className = "check-list";
   outcome.results.forEach((r) => {
     const li = document.createElement("li");
-    li.className = r.pass ? "pass" : "fail";
+    li.className = (r.pass ? "pass" : "fail") + (r.answer ? " is-answer" : "");
     const mark = document.createElement("span");
     mark.className = "check-mark";
     mark.textContent = r.pass ? "✓" : "✗";
@@ -810,14 +853,23 @@ $("btnCheck").addEventListener("click", async () => {
   host.appendChild(ul);
 
   const passed = outcome.results.filter((r) => r.pass).length;
+  store.saveLabWork(currentLab.id);
   if (outcome.ok) {
     store.recordLabPass(currentLab.id);
     renderLabList();
     renderLabPanel(currentLab);
     say(`All ${outcome.results.length} checks passed. ${currentLab.title} is complete.`);
   } else {
-    say(`${passed} of ${outcome.results.length} checks passed.`);
+    say(`${passed} of ${outcome.results.length} checks passed.${outcome.error ? " The simulation did not run; see the explanation under Run simulation." : ""}`);
   }
+});
+
+// Keep each lab's sheet saved as the student works.
+let labSaveTimer = null;
+store.subscribe((_, reason) => {
+  if (!currentLab || reason === "live") return;
+  clearTimeout(labSaveTimer);
+  labSaveTimer = setTimeout(() => { if (currentLab) store.saveLabWork(currentLab.id); }, 400);
 });
 
 /* ------------------------------------------------------- saved circuits */
@@ -855,11 +907,11 @@ function renderLibrary() {
     open.textContent = "Open";
     open.setAttribute("aria-label", `Open ${entry.name}`);
     open.addEventListener("click", () => {
-      if (!confirmReplace(`Opening ${entry.name}`)) return;
+      if (!currentLab && !confirmReplace(`Opening ${entry.name}`)) return;
+      detachLab();
       if (store.openFromLibrary(entry.name)) {
         syncAnalysisInputs();
         canvas.fit();
-        detachLab();
         say(`${entry.name} opened.`);
       }
     });
@@ -904,13 +956,9 @@ $("btnStore").addEventListener("click", () => {
 
 /** Step off a lab, since the sheet is no longer that lab's circuit. */
 function detachLab() {
+  if (currentLab) store.saveLabWork(currentLab.id);
   labSelect.value = "";
-  currentLab = null;
-  $("labTasks").replaceChildren();
-  $("labSummary").textContent = "";
-  $("labProgress").hidden = true;
-  $("checkResults").replaceChildren();
-  $("btnCheck").disabled = true;
+  setLab(null);
 }
 
 /* ------------------------------------------------------------- file I/O */
@@ -940,9 +988,9 @@ $("btnLink").addEventListener("click", async () => {
 });
 
 $("btnNew").addEventListener("click", () => {
-  if (!confirmReplace("Starting a new sheet")) return;
-  store.clear();
+  if (!currentLab && !confirmReplace("Starting a new sheet")) return;
   detachLab();
+  store.clear();
   say("New sheet.");
 });
 
@@ -957,12 +1005,13 @@ $("btnOpen").addEventListener("click", () => $("fileInput").click());
 $("fileInput").addEventListener("change", async (evt) => {
   const file = evt.target.files?.[0];
   if (!file) return;
-  if (!confirmReplace(`Opening ${file.name}`)) { evt.target.value = ""; return; }
+  if (!currentLab && !confirmReplace(`Opening ${file.name}`)) { evt.target.value = ""; return; }
   try {
-    store.loadDocument(await file.text());
+    const text = await file.text();
+    detachLab();
+    store.loadDocument(text);
     syncAnalysisInputs();
     canvas.fit();
-    detachLab();
     say(`${file.name} opened.`);
   } catch (e) {
     showRunError(e.message, "");
@@ -998,9 +1047,8 @@ let cachedNet = null;
 const lastNet = () => cachedNet;
 
 function refresh() {
-  const { text, net, transliterated } = buildNetlist(store.state.comps, store.state.wires, store.state.analysis, store.state.title);
+  const { text, net } = previewNetlist(store.state);
   cachedNet = net;
-  lastTransliterated = transliterated;
 
   $("netOut").value = text;
   if ($("docTitle").value !== store.state.title) $("docTitle").value = store.state.title;
@@ -1008,7 +1056,7 @@ function refresh() {
   canvas.render();
   renderInspector();
   renderPartsTable(net);
-  renderChecks(validate(store.state.comps, store.state.wires, net, store.state.analysis, transliterated));
+  renderChecks(validate(store.state.comps, store.state.wires, net, store.state.analysis));
 
   $("btnUndo").disabled = !store.canUndo();
   $("btnRedo").disabled = !store.canRedo();
@@ -1053,19 +1101,24 @@ async function boot() {
         confirm("This link contains a circuit.\n\nOpening it replaces what is on your sheet, which has unsaved changes.\n\nOpen the linked circuit?")) {
       store.loadCircuit(shared);
       store.state.analysis = { ...DEFAULT_ANALYSIS, ...(shared.analysis || {}) };
-      currentLab = null;
+      store.state.showBias = !!shared.showBias;
+      setLab(null);
       setTimeout(() => say(`Opened "${store.state.title}" from a shared link.`), 0);
     }
     clearHash();
   } else if (!restored) {
     store.state.analysis = { ...DEFAULT_ANALYSIS };
     store.loadCircuit(LABS[0].circuit);
-    labSelect.value = LABS[0].id;
-    currentLab = LABS[0];
-    renderLabPanel(LABS[0]);
+    setLab(LABS[0]);
+  } else {
+    // Reopen the lab the student was in, if the sheet still belongs to it.
+    const lab = labById(store.currentLabId);
+    if (lab) setLab(lab);
   }
+  labSelect.value = currentLab ? currentLab.id : "";
 
   syncAnalysisInputs();
+  syncBiasButton();
   $("docTitle").value = store.state.title;
   store.markClean();
   renderLibrary();
@@ -1080,4 +1133,14 @@ boot().then(() => { window.__spiceLab.ready = true; });
 
 // exposed for the end-to-end tests
 window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, decodeCircuit,
-  explainEngineError, ready: false, getResult: () => lastResult };
+  explainEngineError, ready: false, getResult: () => lastResult,
+  // Leave the current lab and wipe every lab's saved work, so a test can
+  // open a lab and get its starting circuit.
+  freshLabs() {
+    clearTimeout(labSaveTimer);
+    setLab(null);
+    labSelect.value = "";
+    try { localStorage.removeItem("q-circuits-labwork-v1"); } catch { /* storage blocked */ }
+  },
+  currentLab: () => currentLab,
+  simulate, labs: { LABS, runChecks, labById, corners } };
