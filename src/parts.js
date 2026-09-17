@@ -87,6 +87,14 @@ const S = {
            "M25 -20H31", "M25 20H31", "M28 17V23",
            "M44 -30H50", "M47 -33V-27", "M44 30H50"],
   PWR: ["M0 0V-14", "M-12 -14H12"],
+  VPULSE: ["M0 0H19", "M41 0H60", "M19 0 a11 11 0 1 0 22 0 a11 11 0 1 0 -22 0",
+           "M23 4H27L28 -4H32L33 4H37", "M16 -12H22", "M19 -15V-9"],
+  // Primary on the left (pins at x=0), secondary on the right (x=60);
+  // dots mark the pins that are in phase.
+  XFORM: ["M0 0H20V6", "M20 6 a5 5 0 0 1 0 10 a5 5 0 0 1 0 10 a5 5 0 0 1 0 10 a5 5 0 0 1 0 10", "M20 46V60H0",
+          "M60 0H40V6", "M40 6 a5 5 0 0 0 0 10 a5 5 0 0 0 0 10 a5 5 0 0 0 0 10 a5 5 0 0 0 0 10", "M40 46V60H60",
+          "M28 4V56", "M32 4V56",
+          "M13 4 a1.8 1.8 0 1 0 0.01 0Z", "M47 4 a1.8 1.8 0 1 0 0.01 0Z"],
   NET: ["M0 0V-5", "M-3 -5H3"],
   PARAM: ["M0 -12H96"],
   AM: ["M0 0H19", "M41 0H60", "M19 0 a11 11 0 1 0 22 0 a11 11 0 1 0 -22 0",
@@ -94,9 +102,23 @@ const S = {
 };
 
 /** Shapes whose closed subpaths should be filled rather than stroked. */
-const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5] };
+const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5], XFORM: [8, 9] };
 
 /* ------------------------------------------------------------------- parts */
+
+/**
+ * SPICE reads a part's type from its first letter, so a source called
+ * RANDOM would be taken for a resistor. PSpice quietly writes V_RANDOM;
+ * so does this. Names that already start with V are left alone, so VS stays
+ * VS and a DC sweep of VS still finds it.
+ */
+export function sourceName(c) {
+  return /^v/i.test(String(c.label)) ? c.label : `V_${c.label}`;
+}
+
+function withSourceName(def) {
+  return { ...def, netlistName: sourceName };
+}
 
 function twoPin(key, name, prefix, shape, fields, emit, models) {
   return {
@@ -124,10 +146,64 @@ export const PARTS = {
      { k: "ic", label: "Initial current (optional)", def: "", hint: "" }],
     (c, n) => [`${c.label} ${n[0]} ${n[1]} ${c.value}${c.ic ? ` IC=${c.ic}` : ""}`]),
 
-  V: twoPin("V", "Voltage source", "V", S.V,
+  V: withSourceName(twoPin("V", "Voltage source", "V", S.V,
     [{ k: "value", label: "Value", def: "DC 5", hint: "DC 5 · SIN(0 1 1k) · PULSE(0 5 0 1u 1u 1m 2m)" },
      { k: "ac", label: "AC magnitude (for .ac sweeps)", def: "", hint: "Usually 1. Leave blank outside AC analysis" }],
-    (c, n) => [`${c.label} ${n[0]} ${n[1]} ${c.value}${c.ac ? ` AC ${c.ac}` : ""}`]),
+    (c, n) => [`${sourceName(c)} ${n[0]} ${n[1]} ${c.value}${c.ac ? ` AC ${c.ac}` : ""}`])),
+
+  /**
+   * PSpice's VPULSE, with its seven parameters as separate fields so they
+   * cannot be typed in the wrong order.
+   */
+  VPULSE: withSourceName({
+    key: "VPULSE", name: "Pulse source", prefix: "V", shape: S.VPULSE,
+    pins: [[0, 0], [60, 0]], pinNames: ["+", "-"],
+    box: [-4, -16, 64, 16],
+    fields: [
+      { k: "v1", label: "V1, initial voltage", def: "0", hint: "The level before and between pulses" },
+      { k: "v2", label: "V2, pulsed voltage", def: "5", hint: "The level during the pulse" },
+      { k: "td", label: "TD, delay", def: "0", hint: "Time from 0 to the start of the first rise" },
+      { k: "tr", label: "TR, rise time", def: "1n", hint: "Time to go from V1 to V2" },
+      { k: "tf", label: "TF, fall time", def: "1n", hint: "Time to go from V2 back to V1" },
+      { k: "pw", label: "PW, pulse width", def: "0.5m", hint: "Time spent at V2" },
+      { k: "per", label: "PER, period", def: "1m", hint: "Time for one whole cycle" }
+    ],
+    emit: (c, n) => [`${sourceName(c)} ${n[0]} ${n[1]} PULSE(${c.v1} ${c.v2} ${c.td} ${c.tr} ${c.tf} ${c.pw} ${c.per})`],
+    summary: (c) => `${c.v1}→${c.v2} V, PER ${c.per}`,
+    models: () => []
+  }),
+
+  /**
+   * PSpice's XFORM_LINEAR: two inductors and a coupling card. Pins 1–2 are
+   * the primary, 3–4 the secondary, and the dotted ends are pins 1 and 3.
+   */
+  XFORM: {
+    key: "XFORM", name: "Transformer", prefix: "TX", shape: S.XFORM,
+    pins: [[0, 0], [0, 60], [60, 0], [60, 60]],
+    pinNames: ["primary 1", "primary 2", "secondary 3", "secondary 4"],
+    box: [-4, -4, 64, 64],
+    fields: [
+      { k: "l1", label: "L1_VALUE, primary inductance", def: "10m", hint: "Henries" },
+      { k: "l2", label: "L2_VALUE, secondary inductance", def: "10m",
+        hint: "A step-up transformer has L2 above L1. The voltage ratio is about √(L2/L1)" },
+      { k: "k", label: "COUPLING", def: "0.99", hint: "Between 0 and 1. 1 would be a perfect transformer" }
+    ],
+    boxFor: () => [-4, -4, 64, 104],
+    emit: (c, n) => [
+      `L${c.label}_1 ${n[0]} ${n[1]} ${c.l1}`,
+      `L${c.label}_2 ${n[2]} ${n[3]} ${c.l2}`,
+      `K${c.label} L${c.label}_1 L${c.label}_2 ${c.k}`
+    ],
+    // Three short lines under the core, between the leads, as PSpice shows them.
+    summary: () => "",
+    texts: (c) => [
+      { x: 30, y: 72, text: `L1 ${c.l1}`, cls: "part-value", field: "l1" },
+      { x: 30, y: 85, text: `L2 ${c.l2}`, cls: "part-value", field: "l2" },
+      { x: 30, y: 98, text: `k ${c.k}`, cls: "part-value", field: "k" }
+    ],
+    netlistName: (c) => `K${c.label}`,
+    models: () => []
+  },
 
   I: twoPin("I", "Current source", "I", S.I,
     [{ k: "value", label: "Value", def: "DC 1m", hint: "Current flows from + through the source to −" },
@@ -363,7 +439,7 @@ export const PARTS = {
 };
 
 /** Order the palette is presented in. */
-export const PALETTE = ["R", "C", "L", "V", "I", "D", "SW", "AM", "GND", "NET", "PWR", "NPN", "PNP", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM"];
+export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR", "NPN", "PNP", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM"];
 
 /* --------------------------------------------------------------- geometry */
 
@@ -431,6 +507,9 @@ export function textAnchor(comp) {
   const rot = ((comp.rot % 360) + 360) % 360;
   // The 5-pin op-amp has supply leads through the middle of its top and
   // bottom edges, so its text goes beside the body instead.
+  if (comp.type === "XFORM" && rot === 0) {
+    return { lx: comp.x + 30, ly: comp.y - 10, vx: comp.x + 30, vy: comp.y + 78, anchor: "middle" };
+  }
   if (comp.type === "OPAMP5" && rot === 0) {
     return { lx: comp.x + 58, ly: comp.y - 26, vx: comp.x + 58, vy: comp.y + 36, anchor: "start" };
   }

@@ -55,7 +55,8 @@ function toPayload(state) {
     p: state.probes,
     n: state.notes,
     a: state.analysis,
-    ...(state.showBias ? { b: 1 } : {})
+    ...(state.showBias ? { b: 1 } : {}),
+    ...(state.plot && Object.values(state.plot).some(Boolean) ? { g: state.plot } : {})
   };
 }
 
@@ -68,7 +69,8 @@ function fromPayload(p) {
     probes: p.p || [],
     notes: p.n || [],
     analysis: p.a || {},
-    showBias: !!p.b
+    showBias: !!p.b,
+    plot: p.g || {}
   };
 }
 

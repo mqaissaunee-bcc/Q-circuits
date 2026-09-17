@@ -496,6 +496,9 @@ const K = {
         for (const [ref, want] of Object.entries(spec)) {
           const c = ctx.part(ref);
           if (!c) return { pass: false, detail: `there is no part called ${ref}` };
+          if (typeof want === "object" && want.type && c.type !== want.type) {
+            return { pass: false, detail: `${ref} is a ${PARTS[c.type].name.toLowerCase()}; it should be a ${PARTS[want.type].name.toLowerCase()}` };
+          }
           if (typeof want === "string") {
             if (/\s/.test(String(c.value).trim())) return { pass: false, detail: `${ref} is "${c.value}", with a space in it` };
             if (!sameNum(parseValue(c.value), parseValue(want))) return { pass: false, detail: `${ref} is ${c.value || "blank"}; it should be ${want}` };
@@ -514,6 +517,21 @@ const K = {
             const got = sinOf(c);
             if (!got || !want.sin.every((v, k) => sameNum(got[k], v))) {
               return { pass: false, detail: `${ref} is ${c.value}; it should be SIN(${want.sin.join(" ")})` };
+            }
+          }
+          if (want.pulse) {
+            for (const [k, v] of Object.entries(want.pulse)) {
+              if (!sameNum(parseValue(c[k]), parseValue(v))) {
+                return { pass: false, detail: `${ref} has ${k.toUpperCase()} = ${c[k] || "blank"}; it should be ${v}` };
+              }
+            }
+          }
+          if (want.fields) {
+            for (const [k, v] of Object.entries(want.fields)) {
+              if (!sameNum(parseValue(c[k]), parseValue(v))) {
+                const f = PARTS[c.type].fields.find((q) => q.k === k);
+                return { pass: false, detail: `${ref} has ${f ? f.label.split(",")[0] : k} = ${c[k] || "blank"}; it should be ${v}` };
+              }
             }
           }
           if (want.model && c.model !== want.model) {
@@ -611,14 +629,14 @@ const K = {
 
   param(name, values) {
     return {
-      label: `A parametric sweep steps ${name} through ${values.join(", ")}`,
+      label: `A parametric sweep steps ${name} through ${values.map((v) => formatEng(v, 3)).join(", ")}`,
       test: (ctx) => {
         const a = ctx.analysis;
         if (!a.paramOn) return { pass: false, detail: "the parametric sweep is not turned on" };
         if (lc(a.paramName) !== lc(name)) return { pass: false, detail: `the sweep varies ${a.paramName || "nothing"}` };
         const got = paramValues(a) || [];
         const ok = got.length === values.length && values.every((v, k) => sameNum(got[k], v));
-        return { pass: ok, detail: ok ? "" : got.length ? `it steps through ${got.join(", ")}` : "the sweep values could not be read; check start, stop and increment" };
+        return { pass: ok, detail: ok ? "" : got.length ? `it steps through ${got.map((v) => formatEng(v, 3)).join(", ")}` : "the sweep values could not be read; check start, stop and increment" };
       }
     };
   },
@@ -627,6 +645,47 @@ const K = {
     return {
       label: `A voltage probe sits on ${where}`,
       test: (ctx) => ({ pass: ctx.probeOn(spec), detail: ctx.probeOn(spec) ? "" : `no voltage probe on ${where} yet` })
+    };
+  },
+
+  /** The plot's User Defined axis ranges. */
+  axis(want) {
+    const show = (k) => (want[k] === undefined ? "" : formatEng(want[k], 3));
+    const parts = [];
+    if (want.xMin !== undefined) parts.push(`X ${show("xMin")} to ${show("xMax")}`);
+    if (want.yMin !== undefined) parts.push(`Y ${show("yMin")} to ${show("yMax")}`);
+    return {
+      label: `The plot's axis ranges are ${parts.join(", ")}`,
+      test: (ctx) => {
+        const p = ctx.state.plot || {};
+        for (const k of Object.keys(want)) {
+          if (!sameNum(parseValue(p[k]), want[k])) {
+            const axis = k[0].toUpperCase();
+            const lo = p[`${k[0]}Min`], hi = p[`${k[0]}Max`];
+            return { pass: false, detail: String(lo ?? "").trim() || String(hi ?? "").trim()
+              ? `the ${axis} range is ${lo || "auto"} to ${hi || "auto"}`
+              : `the ${axis} axis is still automatic. Open Axis ranges under the plot` };
+          }
+        }
+        return { pass: true, detail: "" };
+      }
+    };
+  },
+
+  dbMode() {
+    return {
+      label: "The plot shows magnitude in dB",
+      test: (ctx) => {
+        const m = ctx.state.plot?.mode || "db";
+        return { pass: m === "db", detail: m === "db" ? "" : `the plot is showing ${m === "mag" ? "plain magnitude" : "phase"}` };
+      }
+    };
+  },
+
+  diff(a, b) {
+    return {
+      label: `A differential probe measures ${a} (+) against ${b} (−)`,
+      test: (ctx) => ({ pass: ctx.diffProbe(a, b), detail: ctx.diffProbe(a, b) ? "" : `use Diff probe: click ${a}, then ${b}` })
     };
   },
 
@@ -829,6 +888,54 @@ const SERIES_7_WIRING = [["VS", ["A", 0], true], ["R1", ["A", "B"]], ["R2", ["B"
 
 /** V(node) at a sweep value, for one parametric step or the only run. */
 const sweepAt = (ctx, spec, x, step = null) => ctx.at(ctx.nodeTrace(spec, step), x);
+
+
+/* Lab 8: the series RC circuit of 8A–8C. */
+const SERIES_8 = { VS: { dc: 0, ac: 1, type: "V" }, R1: "1k", C1: "1u" };
+const SERIES_8_WIRING = [["VS", ["A", 0], true], ["R1", ["A", "B"]], ["C1", ["B", 0]]];
+const CVAL_VALUES = [1e-6, 1.5e-6, 2e-6, 2.5e-6, 3e-6];
+const CVAL_SWEEP = { paramOn: true, paramName: "CVAL", paramMode: "lin", paramStart: "1u", paramStop: "3u", paramStep: "0.5u" };
+
+function PARAM_IS(name, value) {
+  return {
+    label: `A Parameter part defines ${name} = ${formatEng(value, 3)}`,
+    test: (ctx) => {
+      const p = ctx.state.comps.find((c) => c.type === "PARAM" && lc(c.name) === lc(name));
+      return { pass: !!p && sameNum(parseValue(p.value), value), detail: p ? `${name} = ${p.value}` : `no Parameter part named ${name}` };
+    }
+  };
+}
+
+/* Lab 9: the four pulse sources of Figure 9-1. */
+const PULSE_LABS = [
+  { letter: "a", ref: "RANDOM", shape: "Random pulse",
+    pulse: { v1: ".3", v2: "4.6", td: "1n", tr: "1n", tf: "2n", pw: "0.5u", per: ".1m" },
+    r: "750", c: "100p", stop: "1.2u", step: "1.2n", outMax: 4.595,
+    summary: "A single long pulse into an RC circuit. With a 75 ns time constant against a 0.5 µs pulse, the capacitor charges fully and the voltage across R1 spikes at each edge.",
+    simLabel: "OUT charges all the way to 4.6 V" },
+  { letter: "b", ref: "SQUARE", shape: "Square wave",
+    pulse: { v1: ".3", v2: "4.6", td: "0.1n", tr: "0.5n", tf: "0.75n", pw: "0.05u", per: "0.5u" },
+    r: "750", c: "10p", stop: "0.12u", step: "0.12n", outMax: 4.595,
+    summary: "A faster pulse into a faster RC circuit: 7.5 ns against a 50 ns pulse, so the output still settles each time.",
+    simLabel: "OUT settles at 4.6 V during the pulse" },
+  { letter: "c", ref: "TRIANGLE", shape: "Triangle wave",
+    pulse: { v1: ".3", v2: "4.6", td: "1u", tr: "49.5u", tf: "49.5u", pw: "0.01u", per: "100u" },
+    r: "6800", c: "1n", stop: "200u", step: ".2u", outMax: 4.191,
+    summary: "Equal rise and fall times make a triangle. The capacitor lags the input, and the voltage across R1 becomes a nearly square wave: RC times the slope.",
+    simLabel: "OUT follows the triangle, lagging it to a 4.19 V peak" },
+  { letter: "d", ref: "VRAMP", shape: "Ramp",
+    pulse: { v1: ".3", v2: "4.6", td: "10n", tr: "49.5u", tf: "0.5u", pw: "0.01u", per: "50u" },
+    r: "1600", c: "1000p", stop: "160u", step: "1u", outMax: 4.463,
+    summary: "A slow rise and a fast fall make a sawtooth. The voltage across R1 sits at a small step during the ramp and swings hard negative at each drop.",
+    simLabel: "OUT follows the ramp to about 4.46 V" }
+];
+
+/** Max or min of V(IN,OUT) in the reference run. */
+function extreme(ctx, which) {
+  const t = ctx.trace(`v(${ctx.named("IN")},${ctx.named("OUT")})`, null, ctx.ref);
+  if (!t) return NaN;
+  return which === "max" ? Math.max(...t.values) : Math.min(...t.values);
+}
 
 const ELEC101 = [
   /* ---------------------------------------------------------- Lab 4 */
@@ -1376,7 +1483,244 @@ const ELEC101 = [
         return { pass: ok, detail: `at VS = 12: ${got.map((v) => formatEng(v, 3)).join(", ")} V` };
       })
     ]
-  }
+  },
+
+  /* ---------------------------------------------------------- Lab 8 */
+  {
+    id: "e101-08a",
+    group: "e101-8",
+    code: "08A",
+    kind: "draw",
+    title: "8A · AC sweep of an RC circuit",
+    summary: "Draw a series RC circuit with an AC source, sweep it from 1 Hz to 100 kHz, and frame the Bode plot the way the handout does to read the critical frequency.",
+    tasks: [
+      "Type LAB 08A in the circuit name box.",
+      "Place R1 = 1k across the top, C1 = 1u upright below and right of it, and VS on the left with + up. VS is PSpice's VAC source: value DC 0, AC magnitude 1.",
+      "Wire the loop, ground the bottom wire, and add net aliases A (between VS and R1) and B (between R1 and C1).",
+      "In Analysis, choose AC sweep: start 1, stop 100k, 201 points per decade. The start can never be 0.",
+      "Probe B. The AC plot opens in Magnitude dB, PSpice's dB marker.",
+      "Run it. Open Axis ranges under the plot and set Y from -20 to 0, and X from 1 to 10k: one flat decade and 20 dB of roll-off. The faint lines are the 10 minor divisions.",
+      "Hover the plot and find the critical frequency, where the gain has dropped 3 dB from the flat part. Enter it below."
+    ],
+    questions: [
+      { id: "fc", prompt: "Critical frequency, in Hz", rel: 0.05,
+        expect: (ctx) => corners(ctx.nodeTrace("B", null, ctx.ref), ctx.ref?.sweep?.values).hi }
+    ],
+    circuit: blank("08A"),
+    useStudentAnalysis: true,
+    reference: { type: "ac", acPts: "50", acStart: "1", acStop: "100k" },
+    checks: [
+      K.title("08A"),
+      K.parts(SERIES_8),
+      K.wiring(SERIES_8_WIRING),
+      K.noOpenEnds(),
+      K.ac(1, 100e3, 201),
+      K.probe("B", "B"),
+      K.dbMode(),
+      K.axis({ xMin: 1, xMax: 10e3, yMin: -20, yMax: 0 }),
+      K.sim("B rolls off with a corner near 159 Hz", (ctx) => {
+        const fc = corners(ctx.nodeTrace("B"), ctx.result?.sweep?.values).hi;
+        return { pass: near(fc, 159.2, 8), detail: isFinite(fc) ? `the corner is at ${formatEng(fc, 3)} Hz` : "no −3 dB point in the sweep" };
+      })
+    ]
+  },
+
+  {
+    id: "e101-08b",
+    group: "e101-8",
+    code: "08B",
+    kind: "draw",
+    carryFrom: "e101-08a",
+    title: "8B · The voltage across R1",
+    summary: "Same circuit, measured across R1 with a differential probe. The voltage across the resistor rises with frequency: the other half of the same filter.",
+    tasks: [
+      "Start from your 8A circuit and rename it LAB 08B.",
+      "Remove the probe on B: pick Probe and click it again.",
+      "Pick Diff probe (X). Click A first, then B. The trace is V(A,B).",
+      "Keep the 8A sweep and run. There is no need for PSpice's DB( ) trace edit: in Magnitude dB mode every trace is already in dB.",
+      "Set the axis ranges: Y from -20 to 0, X from 10 to 10k.",
+      "Enter the frequency where V(A,B) is 3 dB below its high-frequency level."
+    ],
+    questions: [
+      { id: "fc", prompt: "Frequency where V(A,B) is 3 dB down, in Hz", rel: 0.05,
+        expect: (ctx) => corners(ctx.trace(`v(${ctx.named("A")},${ctx.named("B")})`, null, ctx.ref), ctx.ref?.sweep?.values).lo }
+    ],
+    circuit: blank("08B"),
+    useStudentAnalysis: true,
+    reference: { type: "ac", acPts: "50", acStart: "1", acStop: "100k" },
+    checks: [
+      K.title("08B"),
+      K.parts(SERIES_8),
+      K.wiring(SERIES_8_WIRING),
+      K.ac(1, 100e3, 201),
+      K.diff("A", "B"),
+      K.dbMode(),
+      K.axis({ xMin: 10, xMax: 10e3, yMin: -20, yMax: 0 }),
+      K.sim("V(A,B) rises to 0 dB, with its corner near 159 Hz", (ctx) => {
+        const t = ctx.trace(`v(${ctx.named("A")},${ctx.named("B")})`);
+        const c = corners(t, ctx.result?.sweep?.values);
+        return { pass: near(c.peak, 0, 0.1) && near(c.lo, 159.2, 8),
+          detail: t ? `peaks at ${formatEng(c.peak, 3)} dB, corner ${formatEng(c.lo, 3)} Hz` : "no differential trace in the results" };
+      })
+    ]
+  },
+
+  {
+    id: "e101-08c",
+    group: "e101-8",
+    code: "08C",
+    kind: "draw",
+    carryFrom: "e101-08a",
+    title: "8C · Sweeping the capacitor",
+    summary: "Step C1 through five values in one run and watch the corner frequency move down as the capacitance goes up.",
+    tasks: [
+      "Start from your 8A circuit and rename it LAB 08C.",
+      "Change C1's value to {CVAL}, curly braces included.",
+      "Place a Parameter part anywhere: name CVAL, value 1u.",
+      "Keep the AC sweep and tick Parametric sweep: parameter CVAL, linear, start 1u, end 3u, increment 0.5u.",
+      "Keep the probe on B and the 8A axis ranges (Y -20 to 0, X 1 to 10k), then run. Five curves, one per value.",
+      "Enter the critical frequency for the smallest and largest capacitor."
+    ],
+    questions: [
+      { id: "f1", prompt: "Critical frequency with CVAL = 1u, in Hz", rel: 0.05,
+        expect: (ctx) => corners(ctx.nodeTrace("B", 0, ctx.ref), ctx.ref?.sweep?.values).hi },
+      { id: "f3", prompt: "Critical frequency with CVAL = 3u, in Hz", rel: 0.05,
+        expect: (ctx) => corners(ctx.nodeTrace("B", 4, ctx.ref), ctx.ref?.sweep?.values).hi }
+    ],
+    circuit: blank("08C"),
+    useStudentAnalysis: true,
+    reference: { type: "ac", acPts: "50", acStart: "1", acStop: "100k", ...CVAL_SWEEP },
+    checks: [
+      K.title("08C"),
+      K.parts({ ...SERIES_8, C1: { text: "{cval}" } }, "C1 is {CVAL}; R1 and VS are unchanged"),
+      PARAM_IS("CVAL", 1e-6),
+      K.wiring(SERIES_8_WIRING),
+      K.ac(1, 100e3, 201),
+      K.param("CVAL", CVAL_VALUES),
+      K.probe("B", "B"),
+      K.dbMode(),
+      K.axis({ xMin: 1, xMax: 10e3, yMin: -20, yMax: 0 }),
+      K.sim("Five curves, with corners from about 159 Hz down to 53 Hz", (ctx) => {
+        const fc = [0, 1, 2, 3, 4].map((k) => corners(ctx.nodeTrace("B", k), ctx.result?.sweep?.values).hi);
+        const want = CVAL_VALUES.map((c) => 1 / (2 * Math.PI * 1000 * c));
+        const ok = fc.every((f, k) => near(f, want[k], want[k] * 0.05));
+        return { pass: ok, detail: `corners at ${fc.map((f) => formatEng(f, 3)).join(", ")} Hz` };
+      })
+    ]
+  },
+
+  {
+    id: "e101-08d",
+    group: "e101-8",
+    code: "08D",
+    kind: "draw",
+    carryFrom: "e101-08c",
+    title: "8D · Adding a transformer",
+    summary: "Put a step-up transformer between the source and the filter. The source side now floats, so a very large resistor gives it the path to ground SPICE needs.",
+    tasks: [
+      "Start from your 8C circuit and rename it LAB 08D.",
+      "Cut VS (⌘X) and paste it about an inch to the left. Place the Transformer (Xfmr) in the gap it left: primary (left pins) toward VS, secondary (right pins) toward R1. Name it TX1.",
+      "In the Selected part panel set L1_VALUE 10u, L2_VALUE 10m, COUPLING 0.975. That makes a step-up transformer.",
+      "Place RS = 1u between A (VS +) and the top primary pin (pin 1). Wire VS − to the bottom primary pin (pin 2).",
+      "Wire the top secondary pin (3) to R1 and the bottom secondary pin (4) to the ground wire under C1.",
+      "Place RD = 1000MEG from VS − to its own ground. Without it the primary side has no DC path to ground, and SPICE cannot solve it.",
+      "Keep the AC and parametric sweeps and the probe on B. Run, then set the Y range to 10 to 30: the output is now above the input.",
+      "Enter the low-frequency gain at B for CVAL = 1u, in dB."
+    ],
+    questions: [
+      { id: "gain", prompt: "Gain at B at 10 Hz with CVAL = 1u, in dB", abs: 0.3,
+        expect: (ctx) => {
+          const t = ctx.nodeTrace("B", 0, ctx.ref);
+          return t?.db ? ctx.at({ values: t.db }, 10, ctx.ref) : NaN;
+        } }
+    ],
+    circuit: blank("08D"),
+    useStudentAnalysis: true,
+    reference: { type: "ac", acPts: "50", acStart: "1", acStop: "100k", ...CVAL_SWEEP },
+    checks: [
+      K.title("08D"),
+      K.parts({
+        ...SERIES_8, C1: { text: "{cval}" }, RS: "1u", RD: "1000MEG",
+        TX1: { type: "XFORM", fields: { l1: "10u", l2: "10m", k: "0.975" } }
+      }, "Every part has the name and value from the handout"),
+      PARAM_IS("CVAL", 1e-6),
+      K.wiring([
+        ["VS", ["A", ["TX1", 1]], true],
+        ["RS", ["A", ["TX1", 0]]],
+        ["RD", [["TX1", 1], 0]],
+        ["R1", [["TX1", 2], "B"]],
+        ["C1", ["B", 0]],
+        ["TX1", [{ other: "RS", from: "A" }, ["VS", 1], { other: "R1", from: "B" }, 0], true]
+      ]),
+      {
+        label: "The primary side floats, tied to ground only through RD",
+        test: (ctx) => {
+          const n = ctx.node("VS", 1);
+          return { pass: n !== undefined && n !== 0, detail: n === 0 ? "VS − is wired straight to ground, which shorts RD out" : "" };
+        }
+      },
+      K.noOpenEnds(),
+      K.ac(1, 100e3, 201),
+      K.param("CVAL", CVAL_VALUES),
+      K.probe("B", "B"),
+      K.dbMode(),
+      K.axis({ xMin: 1, xMax: 10e3, yMin: 10, yMax: 30 }),
+      K.sim("The transformer steps the signal up to about +30 dB", (ctx) => {
+        const t = ctx.nodeTrace("B", 0);
+        const g = t?.db ? t.db[0] : NaN;
+        return { pass: near(g, 29.8, 0.6), detail: isFinite(g) ? `B starts at ${formatEng(g, 3)} dB` : "no result at B" };
+      })
+    ]
+  },
+
+  /* ---------------------------------------------------------- Lab 9 */
+  ...PULSE_LABS.map((p) => ({
+    id: `e101-09${p.letter}`,
+    group: "e101-9",
+    code: `09${p.letter.toUpperCase()}`,
+    kind: "draw",
+    carryFrom: p.letter === "a" ? undefined : "e101-09a",
+    title: `9${p.letter.toUpperCase()} · ${p.shape} input`,
+    summary: p.summary,
+    tasks: [
+      p.letter === "a"
+        ? "Type LAB 09A in the circuit name box."
+        : `Start from your 9A circuit if you like, and rename it LAB 09${p.letter.toUpperCase()}.`,
+      p.letter === "a"
+        ? `Place a Pulse source on the left with + up and name it ${p.ref}. Place R1 across the top from its + terminal and C1 upright on the right, back to its − terminal. Ground the node where the source and C1 meet.`
+        : `Rename the pulse source ${p.ref} (double-click its name).`,
+      `Set ${p.ref} in the Selected part panel: V1 ${p.pulse.v1}, V2 ${p.pulse.v2}, TD ${p.pulse.td}, TR ${p.pulse.tr}, TF ${p.pulse.tf}, PW ${p.pulse.pw}, PER ${p.pulse.per}. Set R1 = ${p.r} and C1 = ${p.c}.`,
+      "Name the input node IN (across the source) and the output node OUT (across C1).",
+      `In Analysis, choose Transient: stop time ${p.stop}, time step ${p.step}. These are PSpice's Run to Time and Maximum Step Size.`,
+      "Probe IN and OUT, then use Diff probe (X) with + on IN and − on OUT for the voltage across R1.",
+      "Run it. If a trace crowds the top or bottom of its plot, set a Y range under Axis ranges, as PSpice's User Defined range does.",
+      "The Measurements table under the plot has each trace's Max and Min. Enter the two below."
+    ],
+    questions: [
+      { id: "dmax", prompt: "Most positive V(IN,OUT), in volts", rel: 0.04, abs: 0.02,
+        expect: (ctx) => extreme(ctx, "max") },
+      { id: "dmin", prompt: "Most negative V(IN,OUT), in volts", rel: 0.04, abs: 0.02,
+        expect: (ctx) => extreme(ctx, "min") }
+    ],
+    circuit: blank(`09${p.letter.toUpperCase()}`),
+    useStudentAnalysis: true,
+    reference: { type: "tran", trStep: p.step, trStop: p.stop, trUic: false },
+    checks: [
+      K.title(`09${p.letter.toUpperCase()}`),
+      K.parts({ [p.ref]: { type: "VPULSE", pulse: p.pulse }, R1: p.r, C1: p.c }),
+      K.wiring([[p.ref, ["IN", 0], true], ["R1", ["IN", "OUT"]], ["C1", ["OUT", 0]]]),
+      K.noOpenEnds(),
+      K.tran(parseValue(p.stop), parseValue(p.step)),
+      K.probe("IN", "IN"),
+      K.probe("OUT", "OUT"),
+      K.diff("IN", "OUT"),
+      K.sim(p.simLabel, (ctx) => {
+        const t = ctx.nodeTrace("OUT");
+        const hi = t ? Math.max(...t.values) : NaN;
+        return { pass: near(hi, p.outMax, 0.05), detail: isFinite(hi) ? `OUT peaks at ${formatEng(hi, 4)} V` : "no result at OUT" };
+      })
+    ]
+  }))
 ];
 
 
@@ -1522,11 +1866,73 @@ const D07D = plus(D07C, {
   probes: [vp(520, 100)]
 });
 
+
+/* Lab 8: 8A's series RC, and 8D laid out like the handout's Figure. */
+const D08A = {
+  comps: [
+    P("V", 160, 160, 90, { label: "VS", value: "DC 0", ac: "1" }),
+    P("R", 220, 100, 0, { label: "R1", value: "1k" }),
+    P("C", 340, 160, 90, { label: "C1", value: "1u", ic: "" }),
+    G(250, 300),
+    NET(160, 100, "A"), NET(340, 100, "B")
+  ],
+  wires: D_SERIES.wires,
+  probes: [vp(340, 100)]
+};
+const D08B = { ...D08A, probes: [dp(160, 100, 340, 100)] };
+const D08C = plus(D08A, {
+  drop: ["C1"],
+  comps: [
+    P("C", 340, 160, 90, { label: "C1", value: "{CVAL}", ic: "" }),
+    P("PARAM", 420, 40, 0, { label: "PARAM1", name: "CVAL", value: "1u" })
+  ],
+  probes: [vp(340, 100)]
+});
+const D08D = {
+  comps: [
+    P("PARAM", 160, 40, 0, { label: "PARAM1", name: "CVAL", value: "1u" }),
+    P("V", 100, 200, 90, { label: "VS", value: "DC 0", ac: "1" }),
+    P("R", 160, 140, 0, { label: "RS", value: "1u" }),
+    P("XFORM", 260, 140, 0, { label: "TX1", l1: "10u", l2: "10m", k: "0.975" }),
+    P("R", 380, 140, 0, { label: "R1", value: "1k" }),
+    P("C", 500, 200, 90, { label: "C1", value: "{CVAL}", ic: "" }),
+    P("R", 140, 360, 0, { label: "RD", value: "1000MEG" }),
+    G(240, 360), G(410, 320),
+    NET(100, 140, "A"), NET(500, 140, "B")
+  ],
+  wires: [
+    W(100, 200, 100, 140), W(100, 140, 160, 140), W(220, 140, 260, 140),
+    W(260, 200, 240, 200), W(240, 200, 240, 280), W(240, 280, 100, 280), W(100, 260, 100, 280),
+    W(100, 280, 100, 360), W(100, 360, 140, 360), W(200, 360, 240, 360),
+    W(320, 140, 380, 140), W(440, 140, 500, 140), W(500, 140, 500, 200),
+    W(500, 260, 500, 300), W(500, 300, 340, 300), W(320, 200, 340, 200), W(340, 200, 340, 300),
+    W(410, 300, 410, 320)
+  ],
+  probes: [vp(500, 140)]
+};
+
+/* Lab 9: one series RC circuit, driven by each pulse source in turn. */
+function D09(p) {
+  return {
+    comps: [
+      P("VPULSE", 160, 160, 90, { label: p.ref, ...p.pulse }),
+      P("R", 220, 100, 0, { label: "R1", value: p.r }),
+      P("C", 340, 160, 90, { label: "C1", value: p.c, ic: "" }),
+      G(250, 300),
+      NET(160, 100, "IN"), NET(340, 100, "OUT")
+    ],
+    wires: D_SERIES.wires,
+    probes: [vp(160, 100), vp(340, 100), dp(160, 100, 340, 100)]
+  };
+}
+
 const DIAGRAMS = {
   "e101-04a": D04A, "e101-04b": D04B,
   "e101-05a": D05A, "e101-05b": D05B, "e101-05c": D05C,
   "e101-06a": D_SERIES, "e101-06b": D06B, "e101-06c": D06C,
-  "e101-07a": D07A, "e101-07b": D07B, "e101-07c": D07C, "e101-07d": D07D
+  "e101-07a": D07A, "e101-07b": D07B, "e101-07c": D07C, "e101-07d": D07D,
+  "e101-08a": D08A, "e101-08b": D08B, "e101-08c": D08C, "e101-08d": D08D,
+  ...Object.fromEntries(PULSE_LABS.map((p) => [`e101-09${p.letter}`, D09(p)]))
 };
 
 export const DIAGRAM_CAPTIONS = {
@@ -1549,7 +1955,9 @@ export const LAB_GROUPS = [
   { id: "e101-4", title: "ELEC 101 · Lab 4 — Fixing schematics" },
   { id: "e101-5", title: "ELEC 101 · Lab 5 — Simulation profiles" },
   { id: "e101-6", title: "ELEC 101 · Lab 6 — Drawing circuits" },
-  { id: "e101-7", title: "ELEC 101 · Lab 7 — DC sweep" }
+  { id: "e101-7", title: "ELEC 101 · Lab 7 — DC sweep" },
+  { id: "e101-8", title: "ELEC 101 · Lab 8 — AC sweep" },
+  { id: "e101-9", title: "ELEC 101 · Lab 9 — Transient analysis" }
 ];
 
 export const LAB_KINDS = {

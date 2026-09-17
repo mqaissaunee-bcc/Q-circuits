@@ -125,7 +125,8 @@ function addDerived(result, state, net, analysis, params) {
         const b = nodeAtPoint(net, state.wires, probe.x2, probe.y2);
         const ta = volt(a, sfx), tb = volt(b, sfx);
         if ((a !== 0 && !ta) || (b !== 0 && !tb)) return;
-        const label = `v(${a},${b})${sfx}`;
+        // ngspice lower-cases node names; match it so the legend reads evenly.
+        const label = `v(${String(a).toLowerCase()},${String(b).toLowerCase()})${sfx}`;
         let t;
         if (result.kind === "complex") {
           const A = complexOf(ta, npts), B = complexOf(tb, npts);

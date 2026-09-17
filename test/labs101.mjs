@@ -432,6 +432,59 @@ const DIAGRAM_RUNS = {
   "e101-07c": { title: "LAB 07C", analysis: rvalSweep, answers: { v100: "9", v200: "7.2", v300: "6" } },
   "e101-07d": { title: "LAB 07D", analysis: rvalSweep, answers: { v100: "3.6" } }
 };
+const bode = { plot: { mode: "db", xMin: "1", xMax: "10k", yMin: "-20", yMax: "0" } };
+const acSweep = { type: "ac", acStart: "1", acStop: "100k", acPts: "201" };
+const cvalSweep = { ...acSweep, paramOn: true, paramName: "CVAL", paramMode: "lin", paramStart: "1u", paramStop: "3u", paramStep: "0.5u" };
+Object.assign(DIAGRAM_RUNS, {
+  "e101-08a": { title: "LAB 08A", analysis: acSweep, ...bode, answers: "8a" },
+  "e101-08b": { title: "LAB 08B", analysis: acSweep, plot: { mode: "db", xMin: "10", xMax: "10k", yMin: "-20", yMax: "0" }, answers: "8b" },
+  "e101-08c": { title: "LAB 08C", analysis: cvalSweep, ...bode, answers: "8c" },
+  "e101-08d": { title: "LAB 08D", analysis: cvalSweep, plot: { mode: "db", xMin: "1", xMax: "10k", yMin: "10", yMax: "30" }, answers: "8d" },
+  "e101-09a": { title: "LAB 09A", analysis: { type: "tran", trStop: "1.2u", trStep: "1.2n" }, answers: "9" },
+  "e101-09b": { title: "LAB 09B", analysis: { type: "tran", trStop: "0.12u", trStep: "0.12n" }, answers: "9" },
+  "e101-09c": { title: "LAB 09C", analysis: { type: "tran", trStop: "200u", trStep: ".2u" }, answers: "9" },
+  "e101-09d": { title: "LAB 09D", analysis: { type: "tran", trStop: "160u", trStep: "1u" }, answers: "9" }
+});
+
+/**
+ * Work out a lab's answers from the circuit now on the sheet, by running the
+ * reference analysis here in the test. Deliberately not a hook in the app: a
+ * student could call that from the console.
+ */
+const REF_ANSWERS = async (kind) => {
+  const L = window.__spiceLab;
+  const S = L.store.state;
+  const refAc = { ...S.analysis, type: "ac", acPts: "50", acStart: "1", acStop: "100k" };
+  const find = (r, name, step = null) => r.traces.find((t) => t.name.split(" \u00B7 ")[0].toLowerCase() === name && (step === null || t.step === step));
+  if (kind === "8a") {
+    const r = await L.simulate(S, null, { ...refAc, paramOn: false });
+    return { fc: String(L.labs.corners(find(r, "v(b)"), r.sweep.values).hi) };
+  }
+  if (kind === "8b") {
+    const r = await L.simulate(S, null, { ...refAc, paramOn: false });
+    return { fc: String(L.labs.corners(find(r, "v(a,b)"), r.sweep.values).lo) };
+  }
+  if (kind === "8c") {
+    const r = await L.simulate(S, null, refAc);
+    return {
+      f1: String(L.labs.corners(find(r, "v(b)", 0), r.sweep.values).hi),
+      f3: String(L.labs.corners(find(r, "v(b)", 4), r.sweep.values).hi)
+    };
+  }
+  if (kind === "8d") {
+    const r = await L.simulate(S, null, refAc);
+    const k = r.sweep.values.findIndex((f) => Math.abs(f - 10) < 0.01);
+    return { gain: String(find(r, "v(b)", 0).db[k]) };
+  }
+  if (kind === "9") {
+    const r = await L.simulate(S, null, { ...S.analysis });
+    const t = find(r, "v(in,out)");
+    return { dmax: String(Math.max(...t.values)), dmin: String(Math.min(...t.values)) };
+  }
+  return {};
+};
+await page.evaluate(`window.REF_ANSWERS = ${REF_ANSWERS.toString()}`);
+
 for (const [id, run] of Object.entries(DIAGRAM_RUNS)) {
   const out = await page.evaluate(async ({ id, run }) => {
     const L = window.__spiceLab;
@@ -440,15 +493,129 @@ for (const [id, run] of Object.entries(DIAGRAM_RUNS)) {
     L.store.loadCircuit({ ...d, title: run.title });
     L.store.edit((s) => {
       Object.assign(s.analysis, run.analysis || {});
-      s.answers = run.answers || {};
+      Object.assign(s.plot, run.plot || {});
       s.showBias = !!run.showBias;
     }, "t");
+    const answers = typeof run.answers === "string" ? await window.REF_ANSWERS(run.answers) : (run.answers || {});
+    L.store.edit((s) => { s.answers = answers; }, "t");
     const r = await window.T.check(id);
     return r;
   }, { id, run });
   check(`${id}: its reference diagram passes every check`, out.ok,
     out.error ? `engine: ${out.error.split("\n")[0]}` : out.failed.join(" | "));
 }
+
+console.log("\n— Labs 8 and 9 —");
+for (const id of ["e101-08a", "e101-08b", "e101-08c", "e101-08d", "e101-09a", "e101-09b", "e101-09c", "e101-09d"]) {
+  const st = await page.evaluate(async (i) => { window.T.open(i); return window.T.check(i); }, id);
+  check(`${id}: the blank starting sheet does not pass`, !st.ok, `${st.failed.length} of ${st.n} fail`);
+}
+
+async function loadSolved(id) {
+  return page.evaluate(async ({ id, run }) => {
+    const L = window.__spiceLab;
+    window.T.open(id);
+    L.store.loadCircuit({ ...L.labs.diagramFor(L.labs.labById(id)), title: run.title });
+    L.store.edit((s) => { Object.assign(s.analysis, run.analysis || {}); Object.assign(s.plot, run.plot || {}); }, "t");
+    const answers = await window.REF_ANSWERS(run.answers);
+    L.store.edit((s) => { s.answers = answers; }, "t");
+    return answers;
+  }, { id, run: DIAGRAM_RUNS[id] });
+}
+
+const a8a = await loadSolved("e101-08a");
+check("8A: the critical frequency is 1/(2πRC), about 159 Hz", Math.abs(+a8a.fc - 159.15) < 3, a8a.fc);
+const noAxis = await page.evaluate(async () => {
+  window.T.set((s) => { s.plot.xMin = ""; s.plot.xMax = ""; });
+  return (await window.T.check("e101-08a")).failed.join(" | ");
+});
+check("8A: an automatic X axis is marked, with a pointer to Axis ranges", /X axis is still automatic/.test(noAxis), noAxis.slice(0, 120));
+const magMode = await page.evaluate(async () => {
+  window.T.set((s) => { s.plot.xMin = "1"; s.plot.xMax = "10k"; s.plot.mode = "mag"; });
+  return (await window.T.check("e101-08a")).failed.join(" | ");
+});
+check("8A: a plot left in plain magnitude is marked", /showing plain magnitude/.test(magMode), magMode.slice(0, 120));
+
+const a8b = await loadSolved("e101-08b");
+check("8B: V(A,B) has its corner at the same 159 Hz", Math.abs(+a8b.fc - 159.15) < 3, a8b.fc);
+const a8c = await loadSolved("e101-08c");
+check("8C: the corner falls from 159 Hz to 53 Hz as CVAL goes 1u to 3u",
+  Math.abs(+a8c.f1 - 159.15) < 3 && Math.abs(+a8c.f3 - 53.05) < 1.5, `${a8c.f1} → ${a8c.f3}`);
+const a8d = await loadSolved("e101-08d");
+check("8D: the transformer gives about +29.8 dB, as the handout's 10–30 dB axis expects", Math.abs(+a8d.gain - 29.78) < 0.3, a8d.gain);
+const net8d = await page.inputValue("#netOut");
+check("8D: the transformer is two inductors and a coupling card",
+  /LTX1_1 \S+ \S+ 10u/.test(net8d) && /LTX1_2 \S+ 0 10m/.test(net8d) && /KTX1 LTX1_1 LTX1_2 0.975/.test(net8d),
+  net8d.split("\n").filter((l) => /TX1/.test(l)).join(" | "));
+const grounded = await page.evaluate(async () => {
+  const T = window.T;
+  T.set((s) => { s.wires.push({ id: 99999, x1: 100, y1: 280, x2: 20, y2: 280 }); });
+  T.add("GND", 20, 280, 0, {});
+  return (await T.check("e101-08d")).failed.join(" | ");
+});
+check("8D: grounding the primary side directly is caught", /primary side floats/.test(grounded), grounded.slice(0, 160));
+
+const a9 = {};
+for (const id of ["e101-09a", "e101-09b", "e101-09c", "e101-09d"]) a9[id] = await loadSolved(id);
+const r2 = (x) => Math.round(+x * 100) / 100;
+console.log("   V(IN,OUT) max/min:", Object.entries(a9).map(([k, v]) => `${k.slice(-2)} ${r2(v.dmax)}/${r2(v.dmin)}`).join("  "));
+check("9C: the voltage across R1 plateaus at RC × slope, about ±0.59 V",
+  Math.abs(+a9["e101-09c"].dmax - 0.59) < 0.03 && Math.abs(+a9["e101-09c"].dmin + 0.59) < 0.03);
+check("9D: a small plateau on the ramp and a large negative swing at each drop",
+  Math.abs(+a9["e101-09d"].dmax - 0.139) < 0.02 && +a9["e101-09d"].dmin < -3);
+
+const net9 = await page.evaluate(() => {
+  window.__spiceLab.refresh();
+  return document.getElementById("netOut").value;
+});
+check("9D: a source named VRAMP keeps its name", /^VRAMP IN 0 PULSE\(\.3 4\.6 10n 49\.5u 0\.5u 0\.01u 50u\)/m.test(net9),
+  net9.split("\n").find((l) => /PULSE/.test(l)));
+const prefixed = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  window.T.set(() => { window.T.comp("VRAMP").label = "RAMP"; });
+  L.store.edit((s) => Object.assign(s.analysis, { type: "dc", dcSrc: "RAMP", dcStart: "0", dcStop: "1", dcStep: "1" }), "t");
+  L.refresh();
+  return { net: document.getElementById("netOut").value, warn: document.getElementById("checks").textContent };
+});
+check("a source named RAMP is written V_RAMP, as PSpice does", /^V_RAMP IN 0 PULSE/m.test(prefixed.net));
+check("a DC sweep can name that source as RAMP", /\.dc V_RAMP 0 1 1/.test(prefixed.net) && !/not on the sheet/.test(prefixed.warn),
+  prefixed.net.split("\n").find((l) => l.startsWith(".dc")));
+
+const inspector = await page.evaluate(() => {
+  const S = window.__spiceLab.store;
+  S.selection = new Set([S.state.comps.find((c) => c.type === "VPULSE").id]);
+  window.__spiceLab.refresh();
+  return [...document.querySelectorAll("#inspector label")].map((l) => l.textContent.split(",")[0]);
+});
+check("the pulse source has PSpice's seven fields", ["V1", "V2", "TD", "TR", "TF", "PW", "PER"].every((k) => inspector.includes(k)), inspector.join(" "));
+
+// Axis range controls drive the stored plot settings and the measurements.
+await page.evaluate(async () => {
+  window.T.open("e101-09a");
+  const L = window.__spiceLab;
+  L.store.loadCircuit({ ...L.labs.diagramFor(L.labs.labById("e101-09a")), title: "LAB 09A" });
+  L.store.edit((s) => Object.assign(s.analysis, { type: "tran", trStop: "1.2u", trStep: "1.2n" }), "t");
+  await L.run();
+});
+await page.evaluate(() => { document.getElementById("axisBox").open = true; document.getElementById("axisBox").scrollIntoView(); });
+await page.fill("#plotXMin", "0.6u");
+await page.fill("#plotXMax", "1.2u");
+await page.fill("#plotYMin", "-5");
+await page.fill("#plotYMax", "5");
+await page.waitForTimeout(150);
+const axis = await page.evaluate(() => ({
+  plot: window.__spiceLab.store.state.plot,
+  head: document.querySelector(".measure-scope")?.textContent,
+  maxOut: window.__spiceLab.scope.measurements().find((m) => m.name.toLowerCase() === "v(out)")?.max
+}));
+check("typing axis ranges stores them with the circuit", axis.plot.xMin === "0.6u" && axis.plot.yMax === "5", JSON.stringify(axis.plot));
+// After 0.6 µs the pulse has ended, so OUT is decaying: its visible maximum
+// is well below the 4.6 V it reached earlier.
+check("the measurements follow the visible X range", /visible range/.test(axis.head || "") && axis.maxOut > 0.5 && axis.maxOut < 2, `${axis.head} · max ${axis.maxOut}`);
+if (process.env.SHOTS) await page.locator(".scope-panel").screenshot({ path: "/tmp/9a-plot.png" });
+await page.click("#btnAxisAuto");
+const cleared = await page.evaluate(() => window.__spiceLab.store.state.plot);
+check("All automatic clears the ranges", !cleared.xMin && !cleared.yMax, JSON.stringify(cleared));
 
 const explorations = await page.evaluate(() => {
   const L = window.__spiceLab;
@@ -545,6 +712,11 @@ check("a closed window stays closed on the next lab", closed.staysClosed);
 check("the button reopens it with the new lab's circuit", closed.reopened && closed.hasParam);
 
 if (process.env.SHOTS) {
+  await loadSolved("e101-08d");
+  await page.evaluate(() => { window.__spiceLab.canvas.fit(); });
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/8d.png" });
+  await page.evaluate(async () => { await window.__spiceLab.run(); });
+  await page.locator(".scope-panel").screenshot({ path: "/tmp/8d-plot.png" });
   await page.evaluate(() => {
     localStorage.removeItem("q-circuits-diagram-v1");
     document.getElementById("diagramWin").removeAttribute("style");
@@ -561,6 +733,7 @@ if (process.env.SHOTS) {
 /* ------------------------------------------------------------- the UI */
 
 console.log("\n— sheet tools —");
+await page.evaluate(() => { document.getElementById("axisBox").open = false; window.scrollTo(0, 0); });
 await page.evaluate(() => window.T.open("e101-06a"));
 await page.click('#partTools button[data-tool="NET"]');
 const box = await page.locator("#sheetHost svg.sheet").boundingBox();
@@ -602,7 +775,7 @@ const acDiff = await page.evaluate(async () => {
   L.store.edit((s) => { s.comps.find((c) => c.label === "VS").ac = "1"; Object.assign(s.analysis, { type: "ac", acPts: "5", acStart: "10", acStop: "1k" }); }, "t");
   L.store.toggleProbe("i", "R1", {});
   const r = await L.simulate(L.store.state);
-  const d = r.traces.find((t) => t.name === "v(A,B)");
+  const d = r.traces.find((t) => t.name === "v(a,b)");
   const i = r.traces.find((t) => t.name === "i(r1)");
   return { d: d?.mag[0], i: i?.mag[0] };
 });

@@ -334,8 +334,8 @@ and only the ones actually used reach the netlist.
 ## Labs
 
 The lab list is grouped. **Explorations** are the original five guided labs.
-The **ELEC 101** groups are the PSpice lab exercises (Labs 4–7), rebuilt as
-twelve checked exercises:
+The **ELEC 101** groups are the PSpice lab exercises (Labs 4–9), rebuilt as
+twenty checked exercises:
 
 | Exercise | Kind | What the student does |
 |---|---|---|
@@ -351,6 +351,11 @@ twelve checked exercises:
 | 7B Differential probe | draw | Measure V(A,B) across R1 |
 | 7C Parametric sweep | draw | R1 = {RVAL}, a PARAMETERS part, and RVAL stepped 100/200/300 |
 | 7D Extended divider | draw | Add R3/R4, move B, keep both sweeps |
+| 8A AC sweep of RC | draw | 1 Hz–100 kHz at 201/decade, probe B in dB, set X 1–10k and Y −20–0, read the 159 Hz corner |
+| 8B Voltage across R1 | draw | Differential probe A→B, X 10–10k, read the high-pass corner |
+| 8C Sweeping C1 | draw | C1 = {CVAL}, CVAL stepped 1u to 3u by 0.5u, read the corners at both ends |
+| 8D Transformer | draw | Insert TX1 (10u : 10m, k 0.975), RS and RD, Y 10–30 dB, read the +29.8 dB gain |
+| 9A–9D Pulse inputs | draw | RANDOM, SQUARE, TRIANGLE and VRAMP sources into R1–C1, transient runs, probes on IN, OUT and V(IN,OUT), read its maximum and minimum |
 
 How they behave:
 
@@ -443,6 +448,20 @@ its starting sheet cannot.
   separate panes, like PSpice's Add Plot to Window.
 - **Show DC voltages** prints the operating-point voltage at each node, like
   PSpice's V button. The tags disappear as soon as the circuit changes.
+
+- **Pulse source (Pulse)** is PSpice's VPULSE, with V1, V2, TD, TR, TF, PW
+  and PER as separate fields.
+- **Transformer (Xfmr)** is PSpice's XFORM_LINEAR: L1_VALUE, L2_VALUE and
+  COUPLING, emitted as two inductors and a `K` card. Pins 1–2 are the
+  primary, 3–4 the secondary; the dots mark pins 1 and 3.
+- **Source names.** A source whose name does not start with V (RANDOM,
+  SQUARE) is written `V_RANDOM` in the netlist, as PSpice does. A DC sweep
+  can name it either way.
+- **Axis ranges**, under the plot, are PSpice's User Defined data range: X,
+  Y, and a second Y for the lower pane when volts and amps are stacked.
+  Traces are clipped to the frame, the measurements cover the visible X
+  range, and the ranges and the dB/magnitude/phase choice are saved with the
+  circuit so labs can check them.
 
 ### PSpice models
 

@@ -605,3 +605,8 @@ dl.shortcuts kbd {
   }
   .diagram-head { cursor: default; }
 }
+
+/* axis ranges under the plot */
+.axis-box { margin: var(--sp-2) 0; border: 1px solid var(--rule); border-radius: var(--radius); padding: 0 var(--sp-3); }
+.axis-box summary { padding: var(--sp-2) 0; cursor: pointer; font-size: .85rem; font-weight: 600; }
+.axis-box[open] { padding-bottom: var(--sp-2); }

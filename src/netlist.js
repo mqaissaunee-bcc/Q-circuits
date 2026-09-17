@@ -156,6 +156,20 @@ export function analysisDirective(a) {
 
 /* ---------------------------------------------------------------- netlist */
 
+/** A DC sweep may name a source by its label (RANDOM) or its SPICE name (V_RANDOM). */
+function sweepSourceOf(comps, name) {
+  const want = String(name || "").trim().toLowerCase();
+  return comps.find((c) => netlistNameOf(c).toLowerCase() === want)
+    || comps.find((c) => ["V", "I", "VPULSE"].includes(c.type) && String(c.label).toLowerCase() === want)
+    || null;
+}
+
+function resolveSweepSource(comps, a) {
+  if (a.type !== "dc") return a;
+  const c = sweepSourceOf(comps, a.dcSrc);
+  return c ? { ...a, dcSrc: netlistNameOf(c) } : a;
+}
+
 /**
  * `extra.overrides` maps lower-case parameter names to the value a parametric
  * sweep wants for this run. `extra.saves` lists device quantities to keep,
@@ -186,7 +200,7 @@ export function buildNetlist(comps, wires, analysis, title = "Circuit from the s
 
   lines.push("");
   if (extra.saves && extra.saves.length) lines.push(`.save all ${extra.saves.join(" ")}`);
-  lines.push(analysisDirective(analysis));
+  lines.push(analysisDirective(resolveSweepSource(comps, analysis)));
   lines.push(".end");
   return { text: lines.join("\n"), net };
 }
@@ -308,8 +322,7 @@ export function validate(comps, wires, net, analysis) {
     if (!anyAc) msgs.push({ level: "warn", text: "An AC sweep needs a source with an AC magnitude. Select a source and set it to 1." });
   }
   if (analysis.type === "dc") {
-    const wanted = String(analysis.dcSrc || "").trim().toLowerCase();
-    if (!comps.some((c) => netlistNameOf(c).toLowerCase() === wanted)) {
+    if (!sweepSourceOf(comps, analysis.dcSrc)) {
       msgs.push({ level: "error", text: `The DC sweep names ${analysis.dcSrc}, which is not on the sheet.` });
     }
   }

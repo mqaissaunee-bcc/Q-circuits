@@ -29,6 +29,13 @@ export const DEFAULT_ANALYSIS = {
   paramStart: "", paramStop: "", paramStep: "", paramList: ""
 };
 
+/**
+ * How the waveform plot is framed. Blank means automatic. y applies to the
+ * top pane and y2 to the second, when volts and amps are stacked. `mode` is
+ * the AC display: db, mag or phase.
+ */
+export const DEFAULT_PLOT = { xMin: "", xMax: "", yMin: "", yMax: "", y2Min: "", y2Max: "", mode: "" };
+
 export class Store {
   /**
    * `persist: false` makes a store that never touches localStorage. The
@@ -46,6 +53,7 @@ export class Store {
       probes: [],          // [{kind:'v'|'vd'|'i', ref, x, y, x2?, y2?}]
       notes: [],           // free text on the sheet; never reaches the netlist
       answers: {},         // lab question id -> what the student typed
+      plot: { ...DEFAULT_PLOT },
       showBias: false      // print operating-point voltages on the sheet
     };
     this.selection = new Set();   // ids of comps and wires
@@ -341,7 +349,7 @@ export class Store {
   clear() {
     this.edit((s) => {
       s.comps = []; s.wires = []; s.seq = {}; s.probes = []; s.notes = [];
-      s.answers = {}; s.showBias = false;
+      s.answers = {}; s.showBias = false; s.plot = { ...DEFAULT_PLOT };
       s.title = "Untitled circuit";
     }, "clear");
     this.selection.clear();
@@ -513,6 +521,7 @@ export class Store {
       this.state.notes = parsed.state.notes || [];
       this.state.answers = parsed.state.answers || {};
       this.state.showBias = !!parsed.state.showBias;
+      this.state.plot = { ...DEFAULT_PLOT, ...(parsed.state.plot || {}) };
       this.uid = parsed.uid || 1;
       this.markClean();
       return true;
@@ -542,6 +551,7 @@ export class Store {
       s.notes = doc.notes || [];
       s.answers = doc.answers || {};
       s.showBias = !!doc.showBias;
+      s.plot = { ...DEFAULT_PLOT, ...(doc.plot || {}) };
       s.analysis = { ...DEFAULT_ANALYSIS, ...(doc.analysis || {}) };
     }, "open");
     this.selection.clear();
@@ -562,6 +572,7 @@ export class Store {
       s.notes = (circuit.notes || []).map((n) => ({ ...n, id: this.uid++ }));
       s.answers = {};
       s.showBias = false;
+      s.plot = { ...DEFAULT_PLOT, ...(circuit.plot || {}) };
       s.analysis = { ...DEFAULT_ANALYSIS, ...(circuit.analysis || {}) };
     }, "load");
     this.selection.clear();

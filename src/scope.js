@@ -144,6 +144,7 @@ export function createScope({ host, measureHost, onStatus }) {
   let layout = null;
   let region = null;      // {i0, i1} sample range measurements are limited to
   let dragging = null;    // {x0, x1} in canvas pixels, while the pointer is down
+  let ranges = {};        // user axis ranges, numbers; missing means automatic
 
   const colors = () => {
     const cs = getComputedStyle(canvas);
@@ -215,6 +216,10 @@ export function createScope({ host, measureHost, onStatus }) {
     const useLog = logX();
 
     let xmin = xs[0], xmax = xs[xs.length - 1];
+    if (isFinite(ranges.xMin) && isFinite(ranges.xMax) && ranges.xMax > ranges.xMin &&
+        (!useLog || ranges.xMin > 0)) {
+      xmin = ranges.xMin; xmax = ranges.xMax;
+    }
     if (useLog) { xmin = Math.max(xmin, 1e-12); xmax = Math.max(xmax, xmin * 10); }
 
     const sx = (v) => useLog
@@ -251,6 +256,10 @@ export function createScope({ host, measureHost, onStatus }) {
       if (ymin === ymax) { ymin -= 0.5; ymax += 0.5; }
       const padY = (ymax - ymin) * 0.08;
       ymin -= padY; ymax += padY;
+      // A user range, like PSpice's User Defined data range, replaces the fit.
+      const lo = gi === 0 ? ranges.yMin : ranges.y2Min;
+      const hi = gi === 0 ? ranges.yMax : ranges.y2Max;
+      if (isFinite(lo) && isFinite(hi) && hi > lo) { ymin = lo; ymax = hi; }
       const box = { x: plot.x, y: plot.y + gi * (paneH + GAP), w: plot.w, h: paneH };
       const sy = (v) => box.y + box.h - ((v - ymin) / (ymax - ymin)) * box.h;
       return { ...g, box, ymin, ymax, sy };
@@ -347,6 +356,10 @@ export function createScope({ host, measureHost, onStatus }) {
         ctx.restore();
       }
 
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(box.x, box.y, box.w, box.h);
+      ctx.clip();
       ctx.lineWidth = 1.8;
       ctx.lineJoin = "round";
       pn.traces.forEach((t) => {
@@ -365,6 +378,7 @@ export function createScope({ host, measureHost, onStatus }) {
         ctx.stroke();
       });
       ctx.setLineDash([]);
+      ctx.restore();
     });
 
     ctx.fillStyle = c.soft;
@@ -493,14 +507,27 @@ export function createScope({ host, measureHost, onStatus }) {
     return ["min", "max", "pp", "mean"];
   }
 
+  /** Sample range measured: the dragged region, else the visible x range. */
+  function measuredRange() {
+    const xs = result.sweep.values;
+    if (region) return [region.i0, region.i1];
+    if (isFinite(ranges.xMin) && isFinite(ranges.xMax) && ranges.xMax > ranges.xMin) {
+      let a = xs.findIndex((x) => x >= ranges.xMin);
+      let b = xs.length - 1;
+      while (b > 0 && xs[b] > ranges.xMax) b--;
+      if (a >= 0 && b > a) return [a, b];
+    }
+    return [0, xs.length - 1];
+  }
+
   function renderMeasurements() {
     if (!measureHost) return;
     measureHost.replaceChildren();
     if (!result || !result.sweep) return;
 
     const xs = result.sweep.values;
-    const i0 = region ? region.i0 : 0;
-    const i1 = region ? region.i1 : xs.length - 1;
+    const [i0, i1] = measuredRange();
+    const visible = !region && (i0 > 0 || i1 < xs.length - 1);
     const cols = columnsFor();
 
     const head = document.createElement("div");
@@ -510,7 +537,9 @@ export function createScope({ host, measureHost, onStatus }) {
     title.className = "measure-scope";
     title.textContent = region
       ? `Measuring ${formatEng(xs[i0], 3)} to ${formatEng(xs[i1], 3)} ${sweepUnit()}`
-      : "Measuring the whole sweep \u2014 drag across the plot to narrow it";
+      : visible
+        ? `Measuring the visible range, ${formatEng(xs[i0], 3)} to ${formatEng(xs[i1], 3)} ${sweepUnit()}`
+        : "Measuring the whole sweep \u2014 drag across the plot to narrow it";
     head.appendChild(title);
 
     if (region) {
@@ -651,6 +680,9 @@ export function createScope({ host, measureHost, onStatus }) {
       return mode;
     },
     setMode(m) { mode = m; draw(); },
+    /** Axis ranges as numbers; NaN or missing means automatic. */
+    setRanges(r) { ranges = { ...r }; draw(); },
+    paneCount: () => (layout?.panes?.length || 0),
     getMode: () => mode,
     isComplex: () => !!result && result.kind === "complex",
     hasWaveform: () => !!result && !!result.sweep,
@@ -661,8 +693,7 @@ export function createScope({ host, measureHost, onStatus }) {
     measurements() {
       if (!result || !result.sweep) return [];
       const xs = result.sweep.values;
-      const i0 = region ? region.i0 : 0;
-      const i1 = region ? region.i1 : xs.length - 1;
+      const [i0, i1] = measuredRange();
       return visibleTraces().map((t) => ({
         name: t.name,
         unit: unitOf(t),

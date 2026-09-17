@@ -7,8 +7,8 @@
  */
 
 import { PARTS, PALETTE, pinsOf, netlistNameOf } from "./parts.js";
-import { buildNodes, nodesFor, validate, formatEng, paramValues } from "./netlist.js";
-import { Store, DEFAULT_ANALYSIS } from "./store.js";
+import { buildNodes, nodesFor, validate, formatEng, paramValues, parseValue } from "./netlist.js";
+import { Store, DEFAULT_ANALYSIS, DEFAULT_PLOT } from "./store.js";
 import { createCanvas } from "./canvas.js";
 import { createScope } from "./scope.js";
 import { runNetlist, engineReady } from "./engine.js";
@@ -89,7 +89,8 @@ function shortName(def) {
     "NPN transistor": "NPN", "PNP transistor": "PNP",
     "N-channel MOSFET": "NMOS", "P-channel MOSFET": "PMOS",
     "Op-amp": "Op-amp", "LM324 op-amp": "LM324",
-    "Net alias": "Net alias", "Power symbol": "Power", Parameter: "Param"
+    "Net alias": "Net alias", "Power symbol": "Power", Parameter: "Param",
+    "Pulse source": "Pulse", Transformer: "Xfmr"
   };
   return map[def.name] || def.name;
 }
@@ -493,7 +494,12 @@ function applyResult(result) {
 
   const modes = $("acModes");
   modes.hidden = filtered.kind !== "complex";
-  if (!modes.hidden) setAcMode(scope.getMode());
+  if (!modes.hidden) {
+    const want = plotState().mode;
+    if (want && want !== scope.getMode()) scope.setMode(want);
+    setAcMode(scope.getMode());
+  }
+  applyRanges();
 
   renderOpResults(result);
   updateBias(result);
@@ -607,6 +613,51 @@ function showRunError(message, netlist) {
 
 $("btnRun").addEventListener("click", run);
 
+/* ---------------------------------------------------------- axis ranges */
+
+const PLOT_INPUTS = { xMin: "plotXMin", xMax: "plotXMax", yMin: "plotYMin", yMax: "plotYMax", y2Min: "plotY2Min", y2Max: "plotY2Max" };
+
+function plotState() {
+  if (!store.state.plot) store.state.plot = { ...DEFAULT_PLOT };
+  return store.state.plot;
+}
+
+function applyRanges() {
+  const p = plotState();
+  const r = {};
+  Object.keys(PLOT_INPUTS).forEach((k) => { r[k] = String(p[k] ?? "").trim() ? parseValue(p[k]) : NaN; });
+  scope.setRanges(r);
+  $("plotY2Row").hidden = scope.paneCount() < 2;
+  $("plotYLabel").textContent = scope.paneCount() > 1 ? "Top plot Y from" : "Y from";
+}
+
+function syncPlotInputs() {
+  const p = plotState();
+  Object.entries(PLOT_INPUTS).forEach(([k, id]) => {
+    const el = $(id);
+    if (document.activeElement !== el) el.value = p[k] ?? "";
+  });
+  if (Object.keys(PLOT_INPUTS).some((k) => String(p[k] ?? "").trim())) $("axisBox").open = true;
+  applyRanges();
+}
+
+Object.entries(PLOT_INPUTS).forEach(([k, id]) => {
+  $(id).addEventListener("input", () => {
+    plotState()[k] = $(id).value;
+    store.save();
+    if (currentLab) store.saveLabWork(currentLab.id);
+    applyRanges();
+  });
+});
+
+$("btnAxisAuto").addEventListener("click", () => {
+  const p = plotState();
+  Object.keys(PLOT_INPUTS).forEach((k) => { p[k] = ""; });
+  store.save();
+  syncPlotInputs();
+  say("Both axes are automatic again.");
+});
+
 /* ---------------------------------------------------------- scope modes */
 
 function setAcMode(mode) {
@@ -619,6 +670,9 @@ $("acModes").addEventListener("click", (evt) => {
   if (!b) return;
   scope.setMode(b.dataset.mode);
   setAcMode(b.dataset.mode);
+  plotState().mode = b.dataset.mode;
+  store.save();
+  if (currentLab) store.saveLabWork(currentLab.id);
   say(`Plot showing ${b.textContent}.`);
 });
 
@@ -1070,6 +1124,7 @@ function refresh() {
   renderInspector();
   renderPartsTable(net);
   renderChecks(validate(store.state.comps, store.state.wires, net, store.state.analysis));
+  syncPlotInputs();
 
   $("btnUndo").disabled = !store.canUndo();
   $("btnRedo").disabled = !store.canRedo();

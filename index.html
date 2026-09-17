@@ -247,6 +247,25 @@
     </h2>
     <div class="panel-body">
       <div class="scope-host" id="scopeHost"></div>
+      <details class="axis-box" id="axisBox">
+        <summary>Axis ranges</summary>
+        <p class="field-hint">PSpice's User Defined data range. Leave a pair blank for automatic. SPICE suffixes work: 10k, 1.2u. In dB mode the Y range is in dB.</p>
+        <div class="field-grid-2">
+          <div class="field"><label for="plotXMin">X from</label><input type="text" id="plotXMin" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label for="plotXMax">X to</label><input type="text" id="plotXMax" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <div class="field-grid-2">
+          <div class="field"><label for="plotYMin" id="plotYLabel">Y from</label><input type="text" id="plotYMin" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label for="plotYMax">Y to</label><input type="text" id="plotYMax" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <div class="field-grid-2" id="plotY2Row" hidden>
+          <div class="field"><label for="plotY2Min">Lower plot Y from</label><input type="text" id="plotY2Min" autocomplete="off" spellcheck="false"></div>
+          <div class="field"><label for="plotY2Max">Lower plot Y to</label><input type="text" id="plotY2Max" autocomplete="off" spellcheck="false"></div>
+        </div>
+        <div class="btn-row">
+          <button type="button" id="btnAxisAuto" class="ghost">All automatic</button>
+        </div>
+      </details>
       <div id="measureHost"></div>
       <div id="opResults"></div>
     </div>
