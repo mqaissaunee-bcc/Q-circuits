@@ -7,7 +7,7 @@
  * netlist lines; `models` names any .model cards those lines depend on.
  */
 
-import { gateLines, logicLines, logicOf, jkffLines, parseStimulus, stimulusSource, clockSource, RAIL, RAIL_CARD } from "./digital.js";
+import { gateLines, logicLines, logicOf, jkffLines, timer555Lines, parseStimulus, stimulusSource, clockSource, RAIL, RAIL_CARD } from "./digital.js";
 
 export const GRID = 20;
 
@@ -172,6 +172,18 @@ const S = {
         "M0 40H12", "M12 40a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M0 60H12", "M12 60a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
         ...Array.from({ length: 16 }, (_, k) => `M80 ${150 - 20 * k}h4a4 4 0 1 0 8 0a4 4 0 1 0 -8 0M92 ${150 - 20 * k}H100`)],
   BUSENTRY: ["M0 0L-20 20"],
+  TIMER555: ["M20 -60H100V60H20Z", "M0 -40H20", "M0 0H20", "M0 40H20",
+             "M100 -40H120", "M100 20H120", "M40 -80V-60", "M80 -80V-60", "M60 60V80"],
+  // Dependent sources: control terminals on the left, the source in the
+  // branch on the right. The mark inside says whether it makes volts or amps.
+  DEP_V: ["M0 -20H18", "M0 20H18",
+          "M18 -20a3 3 0 1 0 6 0a3 3 0 1 0 -6 0", "M18 20a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+          "M80 -40V-20", "M80 20V40", "M80 -20L96 0L80 20L64 0Z",
+          "M74 -8H86", "M80 -14V-2", "M74 8H86"],
+  DEP_I: ["M0 -20H18", "M0 20H18",
+          "M18 -20a3 3 0 1 0 6 0a3 3 0 1 0 -6 0", "M18 20a3 3 0 1 0 6 0a3 3 0 1 0 -6 0",
+          "M80 -40V-20", "M80 20V40", "M80 -20L96 0L80 20L64 0Z",
+          "M80 9V-9", "M76 -3L80 -9L84 -3Z"],
   PORT: ["M0 0L12 -10H90V10H12Z"],
   // Digital sources: PSpice's arrow-shaped box, pin at the tip.
   DSRC: ["M-80 -10H-14L0 0L-14 10H-80Z"],
@@ -191,7 +203,7 @@ const S = {
 };
 
 /** Shapes whose closed subpaths should be filled rather than stroked. */
-const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5], XFORM: [8, 9], NJF: [4] };
+const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5], XFORM: [8, 9], NJF: [4], DEP_I: [8] };
 
 /* ------------------------------------------------------------------- parts */
 
@@ -203,6 +215,20 @@ const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [
  */
 export function sourceName(c) {
   return /^v/i.test(String(c.label)) ? c.label : `V_${c.label}`;
+}
+
+/** SPICE letter, control quantity and output quantity for each dependent source. */
+const DEP_KINDS = {
+  VCVS: { letter: "E", in: "v", out: "v", unit: " V/V" },
+  VCCS: { letter: "G", in: "v", out: "i", unit: " S" },
+  CCVS: { letter: "H", in: "i", out: "v", unit: " Ω" },
+  CCCS: { letter: "F", in: "i", out: "i", unit: " A/A" }
+};
+
+/** E1 keeps its name; a source called AMP becomes E_AMP, as with V sources. */
+function depName(c) {
+  const letter = (DEP_KINDS[c.kind] || DEP_KINDS.VCVS).letter;
+  return new RegExp(`^${letter}`, "i").test(String(c.label)) ? c.label : `${letter}_${c.label}`;
 }
 
 /** The logic function and symbol for each 7400-series part number. */
@@ -655,6 +681,80 @@ export const PARTS = {
     emit: () => [], models: () => []
   },
 
+
+  /**
+   * 555 timer. The pins are laid out as the data sheet draws them: trigger,
+   * threshold and control on the left, output and discharge on the right,
+   * supply and reset on top, ground below.
+   */
+  TIMER555: {
+    key: "TIMER555", name: "555 timer", prefix: "U", shape: S.TIMER555,
+    pins: [[0, -40], [0, 0], [0, 40], [120, -40], [120, 20], [80, -80], [40, -80], [60, 80]],
+    pinNames: ["TRIG", "THRESH", "CTRL", "OUT", "DISCH", "RESET", "VCC", "GND"],
+    box: [-4, -84, 124, 84],
+    optionalPins: [3, 4],
+    fields: [{ k: "variant", label: "Device", def: "NE555", options: ["NE555", "7555"],
+               labels: { NE555: "NE555 (bipolar)", "7555": "7555 (CMOS)" },
+               hint: "The bipolar output stops about 1.7 V short of the supply; the CMOS one gets much closer" }],
+    texts: () => [
+      { x: 26, y: -40, text: "TRIG", cls: "pin-name" },
+      { x: 26, y: 0, text: "THR", cls: "pin-name" },
+      { x: 26, y: 40, text: "CTRL", cls: "pin-name" },
+      { x: 94, y: -40, text: "OUT", cls: "pin-name", anchor: "end" },
+      { x: 94, y: 20, text: "DIS", cls: "pin-name", anchor: "end" },
+      { x: 82, y: -52, text: "RST", cls: "pin-name", anchor: "middle" },
+      { x: 38, y: -52, text: "V+", cls: "pin-name", anchor: "middle" },
+      { x: 60, y: 50, text: "GND", cls: "pin-name", anchor: "middle" },
+      { x: 60, y: -14, text: "555", cls: "part-label", anchor: "middle" }
+    ],
+    emit: (c, n) => timer555Lines(`T${c.label}`, {
+      trig: n[0], thresh: n[1], ctrl: n[2], out: n[3], disch: n[4], reset: n[5], vcc: n[6], gnd: n[7]
+    }, c.variant === "7555" ? 0.2 : 1.7),
+    summary: (c) => c.variant || "NE555",
+    netlistName: (c) => `BT${c.label}_o`,
+    models: () => []
+  },
+
+  /**
+   * Dependent sources: the four of them, as PSpice's E, G, H and F. The
+   * control terminals are on the left, the source itself in the branch on
+   * the right. A current-controlled source needs a current to watch, so a
+   * 0 V sense source sits across its control terminals, which is what makes
+   * those terminals a short.
+   */
+  DEP: {
+    key: "DEP", name: "Dependent source", prefix: "E", shape: S.DEP_V,
+    shapeFor: (c) => (DEP_KINDS[c.kind]?.out === "i" ? S.DEP_I : S.DEP_V),
+    pins: [[0, -20], [0, 20], [80, -40], [80, 40]],
+    pinNames: ["control +", "control −", "out +", "out −"],
+    box: [-4, -44, 100, 44],
+    fields: [
+      { k: "kind", label: "Kind", def: "VCVS", options: ["VCVS", "VCCS", "CCVS", "CCCS"],
+        labels: {
+          VCVS: "VCVS — voltage controlled voltage source (E)",
+          VCCS: "VCCS — voltage controlled current source (G)",
+          CCVS: "CCVS — current controlled voltage source (H)",
+          CCCS: "CCCS — current controlled current source (F)"
+        },
+        hint: "The first two letters say what controls it; the last two what it produces" },
+      { k: "gain", label: "Gain", def: "2",
+        hint: "V/V for a VCVS, A/V (siemens) for a VCCS, V/A (ohms) for a CCVS, A/A for a CCCS" }
+    ],
+    emit: (c, n) => {
+      const kind = DEP_KINDS[c.kind] || DEP_KINDS.VCVS;
+      const name = depName(c);
+      if (kind.in === "v") return [`${name} ${n[2]} ${n[3]} ${n[0]} ${n[1]} ${c.gain}`];
+      // A current-controlled source watches the current in a named source.
+      return [
+        `V${name}_s ${n[0]} ${n[1]} DC 0`,
+        `${name} ${n[2]} ${n[3]} V${name}_s ${c.gain}`
+      ];
+    },
+    summary: (c) => `${c.kind} ${c.gain}${DEP_KINDS[c.kind]?.unit || ""}`,
+    netlistName: depName,
+    models: () => []
+  },
+
   /** STIM1: a digital input described by time/value commands. */
   STIM: withSourceName({
     key: "STIM", name: "Digital stimulus", prefix: "DSTM", shape: S.DSRC,
@@ -768,13 +868,13 @@ export const PARTS = {
 
 /** The palette's two tabs. Ground and net aliases belong to both. */
 export const PALETTE_TABS = {
-  analog: ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR",
-    "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM"],
-  digital: ["GATE2", "GATE3", "INV", "JKFF", "MUX151", "DEC154", "STIM", "DCLK", "DHI", "BUSENTRY", "PORT", "NET", "GND"]
+  analog: ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "DEP", "GND", "NET", "PWR",
+    "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "TIMER555", "PARAM"],
+  digital: ["GATE2", "GATE3", "INV", "JKFF", "MUX151", "DEC154", "TIMER555", "STIM", "DCLK", "DHI", "BUSENTRY", "PORT", "NET", "GND"]
 };
 
 /** Order the palette is presented in. */
-export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR", "PORT", "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM",
+export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "DEP", "GND", "NET", "PWR", "PORT", "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "TIMER555", "PARAM",
   "GATE2", "GATE3", "INV", "JKFF", "MUX151", "DEC154", "STIM", "DCLK", "DHI", "BUSENTRY"];
 
 
@@ -800,6 +900,7 @@ export const PART_ICONS = {
   DCLK: { box: [0, 0, 56, 44], paths: ["M4 10H38L48 22L38 34H4Z", "M9 29V19H15V29H21V19H27V29H33V19H36"] },
   DHI: { box: [0, 0, 56, 44], paths: ["M4 10H38L48 22L38 34H4Z", "M16 16V28", "M26 16V28M22 19L26 16"] },
   NET: { box: [0, 0, 56, 44], paths: ["M2 34H54", "M18 34V16", "M18 16H46V27H18"] },
+  TIMER555: { box: [0, 0, 56, 44], paths: ["M12 8H44V36H12Z", "M2 14H12", "M2 30H12", "M44 22H54", "M28 4V8", "M28 36V40"] },
   PARAM: {
     box: [0, 0, 56, 44],
     paths: ["M24 10c-8 0-4 10-12 12c8 2 4 12 12 12", "M32 10c8 0 4 10 12 12c-8 2-4 12-12 12", "M10 22h4"]

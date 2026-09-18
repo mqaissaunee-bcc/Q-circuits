@@ -615,7 +615,7 @@ dl.shortcuts kbd {
 .pin-name { font-family: var(--mono); font-size: 10px; fill: var(--ink-soft); dominant-baseline: middle; }
 
 /* palette tabs */
-.palette-tabs { display: inline-flex; margin-right: var(--sp-2); border-right: 1px solid var(--rule); padding-right: var(--sp-2); }
+.palette-tabs { display: inline-flex; flex-wrap: nowrap; flex: 0 0 auto; margin-right: var(--sp-2); border-right: 1px solid var(--rule); padding-right: var(--sp-2); }
 .palette-tabs button { min-height: 44px; font-weight: 600; }
 #partTools button[hidden] { display: none; }
 
@@ -625,16 +625,18 @@ dl.shortcuts kbd {
 
 /* palette buttons draw the part's own symbol */
 #partTools button[data-tool] { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; padding: 4px .5rem 2px; line-height: 1.1; }
-.part-icon { width: 34px; height: 22px; overflow: visible; }
+.part-icon { width: 34px; height: 22px; overflow: hidden; }
 .part-icon .part-path { stroke: currentColor; stroke-width: 1.25; fill: none; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .part-icon .part-path.is-filled { fill: currentColor; }
-#partTools button[data-tool] span { font-size: .68rem; }
+#partTools button[data-tool] span { font-size: .68rem; white-space: nowrap; }
 
-/* On a phone a wrapped palette eats the sheet, so it scrolls sideways instead. */
-@media (max-width: 640px) {
-  #partTools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
-  #partTools button { flex: 0 0 auto; }
-}
+/*
+ * The palette keeps growing as parts are added, and a wrapped palette pushes
+ * the sheet down the page. One scrolling row instead, at every width: the
+ * Analog and Digital tabs already split it in two.
+ */
+#partTools { flex-wrap: nowrap; align-items: center; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; min-width: 0; flex: 1 1 100%; }
+#partTools button { flex: 0 0 auto; }
 
 /* title block */
 .tb-frame { fill: none; stroke: var(--ink); stroke-width: 1.5; }

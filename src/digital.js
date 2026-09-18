@@ -131,6 +131,50 @@ export function jkffLines(name, { j, clk, k, clr, q, qb }, init = "0") {
   return lines;
 }
 
+/**
+ * A 555 timer, built the way the chip is: three 5 kΩ resistors dividing the
+ * supply, two comparators against ⅔ and ⅓ of it, an SR latch, an output
+ * stage and a discharge transistor.
+ *
+ * The comparators and the latch work at fixed 0/5 V levels internally, which
+ * keeps them independent of the supply the student chooses; only the output
+ * and discharge stages refer to VCC and GND. The latch is given a starting
+ * state, since a cross-coupled pair with no history sits balanced in the
+ * middle and never starts.
+ *
+ * `drop` is how far the output stays below VCC: about 1.7 V for a bipolar
+ * NE555, a fraction of that for a CMOS 7555.
+ */
+export function timer555Lines(name, pins, drop = 1.7) {
+  const { trig, thresh, ctrl, out, disch, reset, vcc, gnd } = pins;
+  const at = (x) => (x === 0 || x === "0" ? "0" : `V(${x})`);
+  const n = (x) => `${name}_${x}`;
+  const q = n("q"), qb = n("qb");
+  const high = `(0.5+0.5*tanh(4*(${at(q)}-2.5)))`;
+  const comparator = (tag, expr) => [
+    `B${n(tag)} ${n(tag)}_raw 0 V = 5*(${expr})`,
+    `R${n(tag)}_d ${n(tag)}_raw ${n(tag)} 1k`,
+    `C${n(tag)}_d ${n(tag)} 0 10p`
+  ];
+  return [
+    `R${n("a")} ${vcc} ${ctrl} 5k`, `R${n("b")} ${ctrl} ${n("lo")} 5k`, `R${n("c")} ${n("lo")} ${gnd} 5k`,
+    // An unconnected input would otherwise be a node SPICE cannot solve.
+    `R${n("pt")} ${trig} ${gnd} 1G`, `R${n("ph")} ${thresh} ${gnd} 1G`, `R${n("pr")} ${reset} ${vcc} 1G`,
+    ...comparator("s", `0.5+0.5*tanh(50*(${at(n("lo"))}-${at(trig)}))`),
+    ...comparator("r", `0.5+0.5*tanh(50*(${at(thresh)}-${at(ctrl)}))`),
+    ...comparator("rs", `0.5+0.5*tanh(20*(${at(reset)}-${at(gnd)}-0.8))`),
+    ...gateLines(n("g1"), "not", [n("s")], n("sbar"), { pullups: false }),
+    ...gateLines(n("g2"), "not", [n("rs")], n("rsact"), { pullups: false }),
+    ...gateLines(n("g3"), "nor", [n("r"), n("rsact")], n("rbar"), { pullups: false }),
+    ...gateLines(n("g4"), "nand", [n("sbar"), qb], q, { pullups: false }),
+    ...gateLines(n("g5"), "nand", [n("rbar"), q], qb, { pullups: false }),
+    `.ic V(${q})=0 V(${qb})=5`,
+    `B${n("o")} ${n("oraw")} 0 V = ${at(gnd)} + ${high}*max(${at(vcc)}-${at(gnd)}-${drop},0)`,
+    `R${n("o")} ${n("oraw")} ${out} 10`,
+    `B${n("d")} ${disch} ${gnd} I = (${at(disch)}-${at(gnd)})*((1-${high})/12 + 1e-9)`
+  ];
+}
+
 /* ------------------------------------------------------------- sources */
 
 /** Edge time for stimulus transitions: fast, but not so fast it stalls ngspice. */

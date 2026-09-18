@@ -238,8 +238,8 @@ src/
                     the check runner
   diagram.js        the floating, read-only Reference diagram window
   submission.js     one attempt as a single PNG to hand in
-  digital.js        gates, the 7473, 74151A, 74154, STIM1 and DigClock from
-                    behavioural sources
+  digital.js        gates, the 7473, 74151A, 74154, the 555, STIM1 and
+                    DigClock from behavioural sources
   main.js           wiring: panels redraw from one refresh()
   styles.css        theme tokens, dark mode, responsive workspace
 test/e2e.mjs        end-to-end suite (Playwright)
@@ -511,6 +511,31 @@ sources (`src/digital.js`), as TTL looks from outside: 0 V is 0, 5 V is 1.
   exercise switches to Digital. Keyboard shortcuts reach every part either
   way.
 
+### 555 timer and dependent sources
+
+The **555** is one part with eight pins, built the way the chip is: three
+5 kΩ resistors dividing the supply, comparators at ⅓ and ⅔ of it, an SR
+latch, an output stage and a discharge transistor. The comparators and latch
+run at fixed 0/5 V levels internally, so they do not care what supply the
+student picks; only the output and discharge stages refer to VCC and GND.
+Choose NE555 for a bipolar output, which stops about 1.7 V short of the
+supply, or 7555 for a CMOS one.
+
+Two things worth telling students. The latch is given a starting state,
+because a cross-coupled pair with no history sits balanced in the middle and
+never starts. And an astable needs its timing capacitor to start discharged:
+set the capacitor's initial condition, or tick *Start from the initial
+conditions (uic)*, or the circuit powers up above the trigger level and sits
+there. A 10k/10k/10n astable then runs at about 4.6 kHz against the data
+sheet's 4.8 kHz, the difference being comparator delay.
+
+**Dependent source** is one part with four kinds, as PSpice's E, G, H and F:
+VCVS, VCCS, CCVS and CCCS. Control terminals on the left, the source in the
+branch on the right, and a gain in V/V, siemens, ohms or A/A. The two
+current-controlled kinds need a current to watch, so a 0 V sense source is
+emitted across their control terminals — which is also why those terminals
+are a short. A source named E1 keeps its name; one named AMP becomes E_AMP.
+
 ### Title block and submission sheet
 
 **Title block** above the sheet draws a frame in the corner of the drawing
@@ -544,7 +569,9 @@ few parts the rule serves badly: chips whose full symbol (a 74154 is 340
 units tall) would shrink to a sliver, and label-like parts whose real symbol
 is mostly text. Those are drawn in a 56 × 44 box.
 
-The written name stays under every icon, and the icons are `aria-hidden`:
+The palette is one row that scrolls sideways rather than wrapping, since it
+grows with every part added and a wrapped palette pushes the sheet down the
+page. The written name stays under every icon, and the icons are `aria-hidden`:
 the label is what names the button. Icons use `currentColor`, so they follow
 dark mode and the pressed state. On a phone the palette scrolls sideways
 rather than wrapping over the sheet.

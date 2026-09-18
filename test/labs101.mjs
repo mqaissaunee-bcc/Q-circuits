@@ -1030,6 +1030,101 @@ if (process.env.SHOTS) {
 
 /* ------------------------------------------------------------- the UI */
 
+console.log("\n— 555 timer and dependent sources —");
+const build = (parts, wires, analysis, extra = {}) => page.evaluate(async ({ parts, wires, analysis, extra }) => {
+  const L = window.__spiceLab;
+  const S = L.store;
+  L.freshLabs();
+  S.clear();
+  S.edit((s) => {
+    parts.forEach((p) => {
+      const c = S.addComp(p.type, p.x, p.y, p.type === "GND" ? "GND" : "X");
+      Object.assign(c, p.fields || {});
+      if (p.label) c.label = p.label;
+      if (p.net) { const n = S.addComp("NET", p.x, p.y, "N"); n.name = p.net; }
+    });
+    wires.forEach(([a, b, c2, d]) => S.addWire(a, b, c2, d));
+    Object.assign(s.analysis, analysis);
+    Object.assign(s, extra);
+  }, "t");
+  const r = await L.simulate(S.state);
+  const trace = (name) => r.traces.find((t) => t.name.toLowerCase() === name);
+  return {
+    names: r.traces.map((t) => t.name),
+    values: Object.fromEntries(r.traces.map((t) => [t.name.toLowerCase(), t.values])),
+    sweep: r.sweep ? r.sweep.values : null,
+    netlist: document.getElementById("netOut").value,
+    has: !!trace("v(out)")
+  };
+}, { parts, wires, analysis, extra });
+
+// A VCVS with a gain of 5: 1 V in, 5 V out.
+const vcvs = await build(
+  [{ type: "V", x: 100, y: 100, label: "VS", fields: { value: "DC 1", ac: "", rot: 90 }, net: "IN" },
+   { type: "GND", x: 100, y: 220 },
+   { type: "DEP", x: 300, y: 100, label: "E1", fields: { kind: "VCVS", gain: "5" } },
+   { type: "R", x: 460, y: 60, label: "RL", fields: { value: "1k", rot: 90 }, net: "OUT" }],
+  [[100, 160, 100, 220], [100, 100, 100, 80], [100, 80, 300, 80],
+   [300, 120, 300, 220], [300, 220, 100, 220],
+   [380, 60, 460, 60], [460, 120, 460, 140], [460, 140, 380, 140],
+   [380, 140, 380, 220], [380, 220, 300, 220]],
+  { type: "op" });
+check("a VCVS multiplies its control voltage", Math.abs(vcvs.values["v(out)"]?.[0] - 5) < 1e-6, JSON.stringify(vcvs.values["v(out)"]));
+
+// A CCCS: 1 mA in the control branch, gain 10, so 1 V across a 100 Ω load.
+const cccs = await build(
+  [{ type: "V", x: 100, y: 100, label: "VS", fields: { value: "DC 1", ac: "", rot: 90 } },
+   { type: "R", x: 200, y: 40, label: "RS", fields: { value: "1k" } },
+   { type: "GND", x: 100, y: 220 },
+   { type: "DEP", x: 300, y: 100, label: "F1", fields: { kind: "CCCS", gain: "10" } },
+   { type: "R", x: 460, y: 60, label: "RL", fields: { value: "100", rot: 90 }, net: "OUT" }],
+  [[100, 100, 100, 40], [100, 40, 200, 40], [260, 40, 300, 40], [300, 40, 300, 80],
+   [100, 160, 100, 220], [300, 120, 300, 220], [300, 220, 100, 220],
+   [380, 60, 460, 60], [460, 120, 460, 140], [460, 140, 380, 140],
+   [380, 140, 380, 220], [380, 220, 300, 220]],
+  { type: "op" });
+check("a CCCS multiplies the current in its control branch", Math.abs(Math.abs(cccs.values["v(out)"]?.[0]) - 1) < 0.02,
+  `V(OUT) = ${cccs.values["v(out)"]?.[0]}`);
+check("its control terminals are a short, made by a 0 V sense source", /^VF1_s \S+ \S+ DC 0$/m.test(cccs.netlist),
+  cccs.netlist.split("\n").filter((l) => /F1/.test(l)).join(" | "));
+
+// A 555 astable: 10k, 10k and 10n is about 4.8 kHz by the data-sheet formula.
+const astable = await build(
+  [{ type: "V", x: 80, y: 60, label: "VCC", fields: { value: "DC 5", ac: "", rot: 90 } },
+   { type: "GND", x: 80, y: 180 },
+   { type: "R", x: 240, y: 60, label: "R1", fields: { value: "10k", rot: 90 } },
+   { type: "R", x: 240, y: 160, label: "R2", fields: { value: "10k", rot: 90 } },
+   { type: "C", x: 240, y: 260, label: "C1", fields: { value: "10n", ic: "0", rot: 90 } },
+   { type: "GND", x: 240, y: 360 },
+   { type: "TIMER555", x: 420, y: 160, label: "U1", fields: { variant: "NE555" } },
+   { type: "C", x: 420, y: 260, label: "C2", fields: { value: "10n", ic: "", rot: 90 } },
+   { type: "GND", x: 420, y: 360 },
+   { type: "GND", x: 480, y: 300 },
+   { type: "R", x: 620, y: 120, label: "RL", fields: { value: "1k", rot: 90 }, net: "OUT" },
+   { type: "GND", x: 620, y: 240 }],
+  [[80, 60, 80, 20], [80, 20, 560, 20], [80, 120, 80, 180],
+   [240, 20, 240, 60], [460, 20, 460, 80], [500, 20, 500, 80],
+   [240, 120, 240, 140], [240, 140, 240, 160], [240, 220, 240, 260], [240, 320, 240, 360],
+   [240, 140, 600, 140], [600, 140, 600, 180], [600, 180, 540, 180],
+   [240, 240, 360, 240], [360, 240, 360, 120], [360, 120, 420, 120], [360, 160, 420, 160],
+   [420, 200, 420, 260], [420, 320, 420, 360],
+   [480, 240, 480, 300],
+   [540, 120, 620, 120], [620, 180, 620, 240]],
+  { type: "tran", trStop: "2m", trStep: "1u", trUic: true });
+check("a 555 is one part on the sheet", /BTU1_o/.test(astable.netlist) && /RTU1_a/.test(astable.netlist));
+const osc = (() => {
+  const t = astable.sweep, v = astable.values["v(out)"];
+  if (!t || !v) return { freq: 0, hi: 0, lo: 0 };
+  const edges = [];
+  for (let k = 1; k < t.length; k++) if (v[k - 1] < 1.5 && v[k] >= 1.5) edges.push(t[k]);
+  const per = edges.slice(1).map((x, i) => x - edges[i]);
+  return { freq: per.length ? per.length / per.reduce((a, b) => a + b, 0) : 0, hi: Math.max(...v), lo: Math.min(...v), cycles: edges.length };
+})();
+check("the astable oscillates near the data-sheet 4.8 kHz", osc.freq > 4200 && osc.freq < 5200, `${Math.round(osc.freq)} Hz over ${osc.cycles} cycles`);
+check("its output swings from ground to about 1.7 V below the supply", osc.lo < 0.2 && osc.hi > 3.1 && osc.hi < 3.5, `${osc.lo.toFixed(2)} to ${osc.hi.toFixed(2)} V`);
+const cap = astable.values["v(1)"] || Object.entries(astable.values).find(([k]) => /^v\(\d+\)$/.test(k))?.[1];
+void cap;
+
 console.log("\n— title block and submission —");
 await loadSolved("e101-07a");
 const tbOff = await page.evaluate(() => document.querySelectorAll(".title-block").length);

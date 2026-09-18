@@ -155,6 +155,7 @@ function shortName(def) {
     "2-input gate": "Gate", "3-input gate": "Gate3", Inverter: "NOT", "JK flip-flop": "7473",
     "Digital stimulus": "STIM1", "Digital clock": "DigClock", "Logic 1 ($D_HI)": "$D_HI",
     "N-channel JFET": "NJF", "74151A multiplexer": "74151A", "74154 decoder": "74154",
+    "555 timer": "555", "Dependent source": "Dep. src",
     "Bus entry": "Bus entry", Port: "Port"
   };
   return map[def.name] || def.name;
