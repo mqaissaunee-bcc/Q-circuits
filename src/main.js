@@ -487,7 +487,8 @@ function cell(text, cls) {
 /* ------------------------------------------------------------- analysis */
 
 const ANA_FIELDS = ["dcSrc", "dcStart", "dcStop", "dcStep", "trStep", "trStop", "acPts", "acStart", "acStop",
-  "paramName", "paramStart", "paramStop", "paramStep", "paramList"];
+  "paramName", "paramStart", "paramStop", "paramStep", "paramList",
+  "noiseOut", "noiseSrc", "noisePts", "noiseStart", "noiseStop", "tempList", "fourierFreq"];
 
 function syncAnalysisInputs() {
   const a = store.state.analysis;
@@ -497,6 +498,11 @@ function syncAnalysisInputs() {
   $("fieldsDC").hidden = a.type !== "dc";
   $("fieldsTran").hidden = a.type !== "tran";
   $("fieldsAC").hidden = a.type !== "ac";
+  $("fieldsNoise").hidden = a.type !== "noise";
+  $("fourierOn").checked = !!a.fourierOn;
+  $("fieldsFourier").hidden = !a.fourierOn;
+  $("tempOn").checked = !!a.tempOn;
+  $("fieldsTemp").hidden = !a.tempOn;
   $("ffInit").value = a.ffInit || "X";
   $("paramOn").checked = !!a.paramOn;
   $("paramMode").value = a.paramMode || "lin";
@@ -504,6 +510,13 @@ function syncAnalysisInputs() {
   $("paramLin").hidden = a.paramMode === "list";
   $("paramListWrap").hidden = a.paramMode !== "list";
 }
+
+[["fourierOn", "fourierOn"], ["tempOn", "tempOn"]].forEach(([id, key]) => {
+  $(id).addEventListener("change", () => {
+    store.edit((s) => { s.analysis[key] = $(id).checked; }, "analysis");
+    syncAnalysisInputs();
+  });
+});
 
 $("ffInit").addEventListener("change", () => {
   store.edit((s) => { s.analysis.ffInit = $("ffInit").value; }, "analysis");
@@ -580,7 +593,60 @@ function applyResult(result) {
   applyRanges();
 
   renderOpResults(result);
+  renderHarmonics(result);
   updateBias(result);
+}
+
+/**
+ * Harmonics and THD of each probed trace, when a transient run asked for
+ * them. Read as a table because that is how a distortion figure is quoted.
+ */
+function renderHarmonics(result) {
+  const host = $("harmonicsHost");
+  host.replaceChildren();
+  const f = result?.fourier;
+  if (!f || !f.traces.length) return;
+
+  const head = document.createElement("p");
+  head.className = "measure-scope";
+  head.textContent = `Harmonics of ${formatEng(f.f0, 4)} Hz, over the last ${f.traces[0].cycles} cycle${f.traces[0].cycles === 1 ? "" : "s"} of the run`;
+  host.appendChild(head);
+
+  f.traces.forEach((t) => {
+    const table = document.createElement("table");
+    table.className = "measure-table";
+    const caption = document.createElement("caption");
+    caption.textContent = `${t.name} — THD ${isFinite(t.thd) ? `${(t.thd * 100).toPrecision(3)} %` : "—"}, DC ${formatEng(t.dc, 3)} ${t.unit}`;
+    table.appendChild(caption);
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    ["Harmonic", "Frequency", "Magnitude", "Relative", "Phase"].forEach((label, i) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      if (i) th.className = "num";
+      hr.appendChild(th);
+    });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+    const body = document.createElement("tbody");
+    t.harmonics.forEach((h) => {
+      const tr = document.createElement("tr");
+      const first = document.createElement("th");
+      first.scope = "row";
+      first.textContent = String(h.harmonic);
+      tr.appendChild(first);
+      [`${formatEng(h.freq, 4)} Hz`, `${formatEng(h.mag, 4)} ${t.unit}`,
+        `${(h.relative * 100).toPrecision(3)} %`, `${h.phase.toFixed(1)}\u00B0`].forEach((text) => {
+        const td = document.createElement("td");
+        td.className = "num";
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    host.appendChild(table);
+  });
 }
 
 /** Hand operating-point voltages to the sheet, for Show DC voltages. */
@@ -1439,4 +1505,4 @@ window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, 
     try { localStorage.removeItem("q-circuits-labwork-v1"); } catch { /* storage blocked */ }
   },
   currentLab: () => currentLab,
-  simulate, diagram, buildSubmissionSheet, labDiagramSource, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor } };
+  simulate, diagram, buildSubmissionSheet, labDiagramSource, parts: { shapeOf, PARTS }, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor } };

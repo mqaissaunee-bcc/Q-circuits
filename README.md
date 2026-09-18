@@ -512,6 +512,42 @@ sources (`src/digital.js`), as TTL looks from outside: 0 V is 0, 5 V is 1.
   exercise switches to Digital. Keyboard shortcuts reach every part either
   way.
 
+### Noise, temperature and Fourier
+
+- **Noise (.noise)** is an analysis type of its own: name the output node and
+  the source the noise is referred back to, and the plot shows output and
+  input noise against frequency. A 10 kΩ resistor comes out at the 12.8 nV/√Hz
+  the textbook says it should.
+- **Temperature sweep** runs the whole analysis once at each temperature in
+  the list and overlays the results, with `.options temp=` per run. It
+  combines with a parametric sweep, which is why the twelve-run cap matters.
+- **Fourier** measures the harmonics of each probed trace over the last whole
+  cycles of a transient run, and reports magnitude, relative size, phase and
+  a THD figure. ngspice's own `.four` writes to its log rather than to
+  vectors, so the arithmetic is done here: the waveform is resampled onto an
+  even grid and correlated with a sine and cosine at each harmonic.
+
+### More parts
+
+Zener and Schottky diodes with their own symbols, a bridge rectifier (four
+diodes in a diamond), a P-channel JFET, a battery, a test point, and signal,
+earth and chassis ground symbols — all three of which are node 0, since the
+symbol only says what kind of ground is meant.
+
+Two behavioural parts worth describing:
+
+- **Voltage regulator** (7805, 7812, LM317): the output follows its set
+  voltage until the input comes within the dropout of it, after which it
+  follows the input down. The LM317 holds 1.25 V above its adjust pin, so the
+  usual two-resistor divider works as it does in life.
+- **Comparator** (LM339) has an **open-collector** output: it pulls low when
+  the inverting input is higher and otherwise lets go, so the circuit needs a
+  pull-up resistor, exactly as the real part does.
+
+A caution learned the hard way, in `BRIDGE`: SPICE reads a device's first
+letter as its type, so the bridge's diodes are named `D…`. A diode called
+`BR1_1` is taken for a behavioural source, and the engine exits on it.
+
 ### Printing
 
 **Print**, above the sheet, gives two pages: the schematic with its title

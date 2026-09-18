@@ -180,6 +180,7 @@
             <option value="dc">DC sweep (.dc)</option>
             <option value="tran">Transient (.tran)</option>
             <option value="ac">AC sweep (.ac)</option>
+            <option value="noise">Noise (.noise)</option>
           </select>
         </div>
 
@@ -220,6 +221,47 @@
             <div class="field"><label for="acPts">Points/decade</label><input type="text" id="acPts"></div>
             <div class="field"><label for="acStart">Start Hz</label><input type="text" id="acStart"></div>
             <div class="field"><label for="acStop">Stop Hz</label><input type="text" id="acStop"></div>
+          </div>
+        </div>
+
+        <div id="fieldsNoise" hidden>
+          <p class="field-hint">Noise at an output node, referred back to an input source. The plot shows volts per √Hz at the output and at the input.</p>
+          <div class="field-grid-2">
+            <div class="field"><label for="noiseOut">Output node</label><input type="text" id="noiseOut" autocomplete="off" spellcheck="false" placeholder="OUT"></div>
+            <div class="field"><label for="noiseSrc">Input source</label><input type="text" id="noiseSrc" autocomplete="off" spellcheck="false" placeholder="VS"></div>
+          </div>
+          <div class="field-grid-3">
+            <div class="field"><label for="noisePts">Points/decade</label><input type="text" id="noisePts"></div>
+            <div class="field"><label for="noiseStart">Start Hz</label><input type="text" id="noiseStart"></div>
+            <div class="field"><label for="noiseStop">Stop Hz</label><input type="text" id="noiseStop"></div>
+          </div>
+        </div>
+
+        <div class="param-box">
+          <div class="checkline">
+            <input type="checkbox" id="fourierOn">
+            <label for="fourierOn">Fourier (harmonics and THD)</label>
+          </div>
+          <div id="fieldsFourier" hidden>
+            <p class="field-hint">Measures the harmonics of each probed trace over the last whole cycles of a transient run.</p>
+            <div class="field">
+              <label for="fourierFreq">Fundamental frequency</label>
+              <input type="text" id="fourierFreq" autocomplete="off" spellcheck="false" placeholder="1k">
+            </div>
+          </div>
+        </div>
+
+        <div class="param-box">
+          <div class="checkline">
+            <input type="checkbox" id="tempOn">
+            <label for="tempOn">Temperature sweep</label>
+          </div>
+          <div id="fieldsTemp" hidden>
+            <p class="field-hint">Runs the analysis once at each temperature, in °C, and overlays the results.</p>
+            <div class="field">
+              <label for="tempList">Temperatures</label>
+              <input type="text" id="tempList" autocomplete="off" spellcheck="false">
+            </div>
           </div>
         </div>
 
@@ -296,6 +338,7 @@
         </div>
       </details>
       <div id="measureHost"></div>
+      <div id="harmonicsHost"></div>
       <div id="opResults"></div>
     </div>
   </section>

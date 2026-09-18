@@ -110,6 +110,11 @@ VLN 0 92 DC 25
  * DC behaviour (Beta, Vto, Lambda, Is, Rd, Rs) and capacitances are kept.
  */
 MODEL_CARDS.J2N3819 = ".model J2N3819 NJF(Beta=1.304m Rd=1 Rs=1 Lambda=2.25m Vto=-3 Is=33.57f Cgd=1.6p Pb=1 Fc=.5 Cgs=2.414p Kf=9.882E-18 Af=1)";
+// 1N4001 rectifier, trimmed like the other library cards.
+MODEL_CARDS.D1N4001 = ".model D1N4001 D(Is=14.11n N=1.984 Rs=33.89m Xti=3 Eg=1.11 Cjo=25.89p M=.44 Vj=.3245 Fc=.5 Bv=400 Ibv=10u)";
+MODEL_CARDS.D1N5817 = ".model D1N5817 D(Is=2.5e-5 N=1.05 Rs=0.02 Cjo=200p M=0.5 Vj=0.4 Bv=25 Ibv=1m)";
+MODEL_CARDS.D1N4733 = ".model D1N4733 D(Is=1e-14 N=1 Rs=1 Cjo=100p M=.3 Vj=.75 Bv=5.1 Ibv=49m)";
+MODEL_CARDS.JPFET = ".model JPFET PJF(Beta=1m Vto=-3 Lambda=2m Rd=1 Rs=1 Is=33f Cgs=2.4p Cgd=1.6p)";
 MODEL_CARDS.D1N914 = ".model D1N914 D(Is=168.1E-21 N=1 Rs=.1 Ikf=0 Xti=3 Eg=1.11 Cjo=4p M=.3333 Vj=.75 Fc=.5 Isr=100p Nr=2 Bv=100 Ibv=100u Tt=11.54n)";
 
 // The rail every digital input is pulled up to, and $D_HI connects to.
@@ -186,6 +191,20 @@ const S = {
   SEG7: ["M20 -80H100V90H20Z",
          "M38 -62H74", "M78 -58V-6", "M78 6V58", "M38 62H74", "M34 6V58", "M34 -58V-6", "M38 0H74",
          ...Array.from({ length: 7 }, (_, k) => `M0 ${-60 + 20 * k}H20`), "M60 90V110"],
+  ZENER: ["M0 0H22", "M22 -10V10", "M22 -10L38 0L22 10Z", "M38 -10H32M38 -10V10M38 10H44", "M38 0H60"],
+  SCHOTTKY: ["M0 0H22", "M22 -10V10", "M22 -10L38 0L22 10Z",
+             "M30 -10H38V10H46M30 -10V-4", "M46 10V4", "M38 0H60"],
+  BRIDGE: ["M40 -40L80 0L40 40L0 0Z", "M40 -40V-60", "M40 40V60", "M0 0H-20", "M80 0H100",
+           "M24 -20L36 -14M30 -23V-11", "M56 -20L44 -14M50 -23V-11",
+           "M24 20L36 14M30 23V11", "M56 20L44 14M50 23V11"],
+  PJF: ["M0 0H24", "M24 -18V18", "M24 -12H40V-40", "M24 12H40V40", "M32 -4L24 0L32 4Z"],
+  REG: ["M10 -30H90V30H10Z", "M0 -10H10", "M90 -10H100", "M50 30V50"],
+  CMP: ["M0 -20H20", "M0 20H20", "M20 -30L20 30L64 0Z", "M64 0H80",
+        "M25 -20H31", "M25 20H31", "M28 17V23"],
+  BATT: ["M0 0H22", "M22 -14V14", "M30 -7V7", "M38 -14V14", "M46 -7V7", "M46 0H60"],
+  GND_EARTH: ["M0 0V10", "M-12 10H12", "M-8 16H8", "M-4 22H4"],
+  GND_CHASSIS: ["M0 0V10", "M-12 10H12", "M-10 10L-16 22", "M0 10L-6 22", "M10 10L4 22"],
+  TP: ["M0 0V-12", "M-6 -18a6 6 0 1 0 12 0a6 6 0 1 0 -12 0", "M-4 -22L4 -14M-4 -14L4 -22"],
   POT: ["M0 0H16", "M16 -10H64V10H16Z", "M64 0H80", "M40 -40V-18", "M34 -24L40 -16L46 -24Z"],
   ACSRC: ["M0 0H19", "M41 0H60", "M19 0a11 11 0 1 0 22 0a11 11 0 1 0 -22 0",
           "M24 2q4 -8 6 0t6 0", "M16 -12H22", "M19 -15V-9"],
@@ -222,7 +241,8 @@ const S = {
 };
 
 /** Shapes whose closed subpaths should be filled rather than stroked. */
-const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5], XFORM: [8, 9], NJF: [4], DEP_I: [8], LED: [3], POT: [4] };
+const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5], XFORM: [8, 9], NJF: [4], DEP_I: [8], LED: [3], POT: [4],
+  ZENER: [2], SCHOTTKY: [2], PJF: [4], BATT: [] };
 
 /* ------------------------------------------------------------------- parts */
 
@@ -381,9 +401,12 @@ export const PARTS = {
 
   GND: {
     key: "GND", name: "Ground", prefix: "GND", shape: S.GND,
+    shapeFor: (c) => (c.style === "earth" ? S.GND_EARTH : c.style === "chassis" ? S.GND_CHASSIS : S.GND),
     pins: [[0, 0]], pinNames: ["0"],
     box: [-13, -6, 13, 24],
-    fields: [], emit: () => [], models: () => [], noLabel: true
+    fields: [{ k: "style", label: "Symbol", def: "signal", optional: true, options: ["signal", "earth", "chassis"],
+               labels: { signal: "Signal ground", earth: "Earth", chassis: "Chassis" },
+               hint: "All three are node 0: the symbol says what kind of ground it stands for" }], emit: () => [], models: () => [], noLabel: true
   },
 
   NPN: {
@@ -943,6 +966,155 @@ export const PARTS = {
     models: (c) => [c.model]
   },
 
+
+  /** Zener diode: drawn with its bent bar, and a breakdown voltage to pick. */
+  ZENER: {
+    key: "ZENER", name: "Zener diode", prefix: "D", shape: S.ZENER,
+    pins: [[0, 0], [60, 0]], pinNames: ["anode", "cathode"],
+    box: [-4, -14, 64, 14],
+    fields: [{ k: "model", label: "Model", def: "D1N750", options: ["D1N750", "D1N4733"],
+               labels: { D1N750: "1N750 — 4.7 V", D1N4733: "1N4733 — 5.1 V" },
+               hint: "Wire it in reverse: the cathode goes to the more positive side" }],
+    emit: (c, n) => [`${c.label} ${n[0]} ${n[1]} ${c.model}`],
+    summary: (c) => c.model.replace(/^D/, ""),
+    models: (c) => [c.model]
+  },
+
+  /** Schottky diode: a low forward drop, drawn with the S-shaped bar. */
+  SCHOTTKY: {
+    key: "SCHOTTKY", name: "Schottky diode", prefix: "D", shape: S.SCHOTTKY,
+    pins: [[0, 0], [60, 0]], pinNames: ["anode", "cathode"],
+    box: [-4, -14, 64, 14],
+    fields: [{ k: "model", label: "Model", def: "D1N5817", options: ["D1N5817"],
+               hint: "About 0.35 V forward, against 0.7 V for a silicon diode" }],
+    emit: (c, n) => [`${c.label} ${n[0]} ${n[1]} ${c.model}`],
+    summary: () => "1N5817",
+    models: (c) => [c.model]
+  },
+
+  /** Bridge rectifier: four diodes in the usual diamond. */
+  BRIDGE: {
+    key: "BRIDGE", name: "Bridge rectifier", prefix: "BR", shape: S.BRIDGE,
+    pins: [[40, -60], [40, 60], [-20, 0], [100, 0]],
+    pinNames: ["+ out", "− out", "AC 1", "AC 2"],
+    box: [-24, -64, 104, 64],
+    fields: [{ k: "model", label: "Diode model", def: "D1N4001", options: ["D1N4001", "D1N4148"],
+               hint: "Four of these, wired so either AC polarity reaches the same output pins" }],
+    texts: () => [
+      { x: 40, y: -46, text: "+", cls: "pin-name", anchor: "middle" },
+      { x: 40, y: 48, text: "−", cls: "pin-name", anchor: "middle" }
+    ],
+    emit: (c, n) => {
+      const [plus, minus, ac1, ac2] = n;
+      // SPICE reads the first letter as the device type, so these are named
+      // D…: a diode called BR1_1 would be taken for a behavioural source.
+      return [
+        `D${c.label}_1 ${ac1} ${plus} ${c.model}`,
+        `D${c.label}_2 ${ac2} ${plus} ${c.model}`,
+        `D${c.label}_3 ${minus} ${ac1} ${c.model}`,
+        `D${c.label}_4 ${minus} ${ac2} ${c.model}`
+      ];
+    },
+    summary: (c) => c.model.replace(/^D/, ""),
+    netlistName: (c) => `D${c.label}_1`,
+    models: (c) => [c.model]
+  },
+
+  /** P-channel JFET. */
+  PJF: {
+    key: "PJF", name: "P-channel JFET", prefix: "J", shape: S.PJF,
+    pins: [[0, 0], [40, -40], [40, 40]], pinNames: ["gate", "drain", "source"],
+    box: [-4, -44, 46, 44],
+    fields: [{ k: "model", label: "Model", def: "JPFET", options: ["JPFET"], hint: "A generic P-channel JFET" }],
+    emit: (c, n) => [`${c.label} ${n[1]} ${n[0]} ${n[2]} ${c.model}`],
+    models: (c) => [c.model]
+  },
+
+  /**
+   * Three-terminal voltage regulator. Behavioural: the output follows the
+   * set voltage until the input gets within the dropout of it, after which
+   * it follows the input down. An LM317 sets its voltage 1.25 V above the
+   * adjust pin, so the usual two-resistor divider works as it does in life.
+   */
+  REG: {
+    key: "REG", name: "Voltage regulator", prefix: "U", shape: S.REG,
+    pins: [[0, -10], [100, -10], [50, 50]], pinNames: ["in", "out", "gnd / adj"],
+    box: [-4, -34, 104, 54],
+    fields: [
+      { k: "device", label: "Device", def: "7805", options: ["7805", "7812", "LM317"],
+        labels: { 7805: "7805 — 5 V fixed", 7812: "7812 — 12 V fixed", LM317: "LM317 — adjustable" },
+        hint: "A fixed regulator holds out above its ground pin; the LM317 holds 1.25 V above its adjust pin" },
+      { k: "dropout", label: "Dropout (V)", def: "2", hint: "How far above the output the input has to stay" }
+    ],
+    texts: (c) => [{ x: 50, y: 0, text: c.device || "7805", cls: "part-label", anchor: "middle" }],
+    emit: (c, n) => {
+      const [vin, vout, ref] = n;
+      const at = (node) => (node === 0 ? "0" : `V(${node})`);
+      const set = c.device === "LM317" ? 1.25 : c.device === "7812" ? 12 : 5;
+      const ideal = `${at(ref)}+${set}`;
+      return [
+        `B${c.label} ${c.label}_o 0 V = min(${ideal}, ${at(vin)}-${c.dropout})`,
+        `R${c.label}_o ${c.label}_o ${vout} 0.1`,
+        // The adjust pin draws a little current, as the real part does.
+        `I${c.label}_adj ${ref} 0 50u`
+      ];
+    },
+    summary: (c) => c.device || "7805",
+    netlistName: (c) => `B${c.label}`,
+    models: () => []
+  },
+
+  /**
+   * Comparator with an open-collector output, like an LM339: it pulls the
+   * output down when the inverting input is higher, and otherwise lets go,
+   * so the circuit needs a pull-up resistor.
+   */
+  CMP: {
+    key: "CMP", name: "Comparator", prefix: "U", shape: S.CMP,
+    pins: [[0, -20], [0, 20], [80, 0], [40, -40], [40, 40]],
+    pinNames: ["in−", "in+", "out", "V+", "V−"],
+    box: [-4, -44, 84, 44],
+    optionalPins: [2],
+    fields: [{ k: "device", label: "Device", def: "LM339", options: ["LM339"],
+               hint: "Open collector: the output only pulls low, so give it a pull-up resistor" }],
+    texts: () => [
+      { x: 58, y: -26, text: "LM339", cls: "part-value", anchor: "start" }
+    ],
+    emit: (c, n) => {
+      const at = (node) => (node === 0 ? "0" : `V(${node})`);
+      const [inm, inp, out, , vneg] = n;
+      // Conducting when in− is the higher of the two, over a millivolt or so.
+      const on = `(0.5+0.5*tanh(2000*(${at(inm)}-${at(inp)})))`;
+      return [`B${c.label} ${out} ${vneg} I = (${at(out)}-${at(vneg)})*(${on}/60 + 1e-9)`];
+    },
+    summary: () => "LM339",
+    netlistName: (c) => `B${c.label}`,
+    models: () => []
+  },
+
+  /** Battery: a stack of cells rather than a circle, and a DC value. */
+  BATT: withSourceName({
+    key: "BATT", name: "Battery", prefix: "V", shape: S.BATT,
+    pins: [[0, 0], [60, 0]], pinNames: ["+", "-"],
+    box: [-4, -18, 64, 18],
+    fields: [{ k: "value", label: "Voltage", def: "9", hint: "Volts. The long bar is the positive terminal" }],
+    emit: (c, n) => [`${sourceName(c)} ${n[0]} ${n[1]} DC ${c.value}`],
+    summary: (c) => `${c.value} V`,
+    models: () => []
+  }),
+
+  /** Test point: a named place to probe, drawn as a ringed cross. */
+  TP: {
+    key: "TP", name: "Test point", prefix: "TP", shape: S.TP,
+    pins: [[0, 0]], pinNames: ["net"],
+    virtual: true, noLabel: true, countsAsPin: true, upright: true,
+    boxFor: (c) => [-14, -46, Math.max(14, 9 * String(c.name || "?").length + 6), 4],
+    fields: [{ k: "name", label: "Name", def: "TP1", hint: "Names the node, like a net alias, and marks it as somewhere to measure" }],
+    netName: (c) => c.name,
+    texts: (c) => [{ x: 10, y: -30, text: c.name || "?", cls: "net-name", field: "name" }],
+    emit: () => [], models: () => []
+  },
+
   /** STIM1: a digital input described by time/value commands. */
   STIM: withSourceName({
     key: "STIM", name: "Digital stimulus", prefix: "DSTM", shape: S.DSRC,
@@ -1056,13 +1228,14 @@ export const PARTS = {
 
 /** The palette's two tabs. Ground and net aliases belong to both. */
 export const PALETTE_TABS = {
-  analog: ["R", "POT", "C", "L", "V", "ACSRC", "VPULSE", "I", "D", "LED", "SW", "AM", "XFORM", "DEP", "GND", "NET", "PWR",
-    "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "TIMER555", "PARAM"],
+  analog: ["R", "POT", "C", "L", "V", "ACSRC", "VPULSE", "BATT", "I", "D", "ZENER", "SCHOTTKY", "LED", "BRIDGE",
+    "SW", "AM", "XFORM", "DEP", "GND", "NET", "PWR", "PORT", "TP",
+    "NPN", "PNP", "NJF", "PJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "CMP", "REG", "TIMER555", "PARAM"],
   digital: ["GATE2", "GATE3", "INV", "JKFF", "DFF", "SIPO", "MUX151", "DEC154", "DEC7447", "SEG7", "TIMER555", "STIM", "DCLK", "DHI", "BUSENTRY", "PORT", "NET", "GND"]
 };
 
 /** Order the palette is presented in. */
-export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "DEP", "POT", "ACSRC", "LED", "GND", "NET", "PWR", "PORT", "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "TIMER555", "PARAM",
+export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "DEP", "POT", "ACSRC", "BATT", "LED", "ZENER", "SCHOTTKY", "BRIDGE", "REG", "CMP", "GND", "NET", "PWR", "PORT", "TP", "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "TIMER555", "PARAM",
   "GATE2", "GATE3", "INV", "JKFF", "DFF", "SIPO", "MUX151", "DEC154", "DEC7447", "SEG7", "STIM", "DCLK", "DHI", "BUSENTRY"];
 
 

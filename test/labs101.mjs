@@ -1031,7 +1031,7 @@ if (process.env.SHOTS) {
 /* ------------------------------------------------------------- the UI */
 
 console.log("\n— 555 timer and dependent sources —");
-const build = (parts, wires, analysis, extra = {}) => page.evaluate(async ({ parts, wires, analysis, extra }) => {
+const build = (parts, wires, analysis, extra = {}, probeOut = false) => page.evaluate(async ({ parts, wires, analysis, extra, probeOut }) => {
   const L = window.__spiceLab;
   const S = L.store;
   L.freshLabs();
@@ -1047,16 +1047,26 @@ const build = (parts, wires, analysis, extra = {}) => page.evaluate(async ({ par
     Object.assign(s.analysis, analysis);
     Object.assign(s, extra);
   }, "t");
-  const r = await L.simulate(S.state);
+  if (probeOut) {
+    const out = S.state.comps.find((c) => c.type === "NET" && c.name === "OUT");
+    if (out) S.toggleProbe("v", `${out.x},${out.y}`, { x: out.x, y: out.y });
+  }
+  let r;
+  try {
+    r = await L.simulate(S.state);
+  } catch (e) {
+    return { error: e.message, netlist: document.getElementById("netOut").value, values: {}, names: [] };
+  }
   const trace = (name) => r.traces.find((t) => t.name.toLowerCase() === name);
   return {
     names: r.traces.map((t) => t.name),
     values: Object.fromEntries(r.traces.map((t) => [t.name.toLowerCase(), t.values])),
     sweep: r.sweep ? r.sweep.values : null,
     netlist: document.getElementById("netOut").value,
+    fourier: r.fourier ? { f0: r.fourier.f0, traces: r.fourier.traces } : null,
     has: !!trace("v(out)")
   };
-}, { parts, wires, analysis, extra });
+}, { parts, wires, analysis, extra, probeOut });
 
 // A VCVS with a gain of 5: 1 V in, 5 V out.
 const vcvs = await build(
@@ -1386,6 +1396,169 @@ if (process.env.SHOTS) {
   });
   await page.locator("#sheetHost").screenshot({ path: "/tmp/titleblock.png" });
 }
+
+console.log("\n— second-tier parts —");
+
+const reg = await build(
+  [{ type: "V", x: 100, y: 100, label: "VS", fields: { value: "DC 12", ac: "", rot: 90 } },
+   { type: "REG", x: 240, y: 50, label: "U1", fields: { device: "7805", dropout: "2" } },
+   { type: "R", x: 400, y: 100, label: "RL", fields: { value: "100", rot: 90 }, net: "OUT" },
+   { type: "GND", x: 100, y: 220 }, { type: "GND", x: 400, y: 220 }, { type: "GND", x: 290, y: 160 }],
+  [[100, 100, 100, 40], [100, 40, 240, 40], [340, 40, 400, 40], [400, 40, 400, 100],
+   [400, 160, 400, 220], [100, 160, 100, 220], [290, 100, 290, 160]],
+  { type: "op" });
+check("a 7805 holds its output at 5 V", Math.abs(reg.values["v(out)"]?.[0] - 5) < 0.02, reg.error || `${reg.values["v(out)"]?.[0]} V`);
+
+const bridge = await build(
+  [{ type: "V", x: 100, y: 100, label: "VS", fields: { value: "DC 10", ac: "", rot: 90 } },
+   { type: "BRIDGE", x: 300, y: 160, label: "BR1", fields: { model: "D1N4001" } },
+   { type: "R", x: 460, y: 160, label: "RL", fields: { value: "1k", rot: 90 }, net: "OUT" },
+   { type: "GND", x: 340, y: 280 }],
+  // The AC 2 wire goes round: a wire passing through the AC 1 pin would
+  // connect to it and short the bridge out.
+  [[100, 100, 280, 160], [100, 160, 100, 320], [100, 320, 400, 320], [400, 320, 400, 160],
+   [340, 100, 460, 160], [340, 220, 460, 220], [340, 220, 340, 280]],
+  { type: "op" });
+check("a bridge rectifier puts two diode drops between its AC and DC sides",
+  Math.abs(Math.abs(bridge.values["v(out)"]?.[0]) - 8.6) < 0.8, bridge.error || `${bridge.values["v(out)"]?.[0]} V`);
+
+const cmp = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  const read = async (vin) => {
+    L.freshLabs();
+    S.clear();
+    S.edit((s) => {
+      const add = (type, x, y, f = {}) => { const c = S.addComp(type, x, y, type === "GND" ? "GND" : "X"); Object.assign(c, f); return c; };
+      add("V", 100, 100, { label: "VIN", value: `DC ${vin}`, ac: "", rot: 90 });
+      add("V", 240, 100, { label: "VREF", value: "DC 1", ac: "", rot: 90 });
+      add("V", 380, 100, { label: "VCC", value: "DC 5", ac: "", rot: 90 });
+      add("CMP", 500, 300, { label: "U1", device: "LM339" });
+      add("R", 620, 160, { label: "RPU", value: "10k", rot: 90 });
+      add("GND", 380, 460);
+      const n = S.addComp("NET", 600, 300, "N"); n.name = "OUT";
+      S.addWire(100, 100, 180, 100); S.addWire(180, 100, 180, 320); S.addWire(180, 320, 500, 320);
+      S.addWire(240, 100, 320, 100); S.addWire(320, 100, 320, 280); S.addWire(320, 280, 500, 280);
+      // Out to the right first: straight down from VCC's + pin would pass
+      // through its − pin and short the supply.
+      S.addWire(380, 100, 460, 100); S.addWire(460, 100, 460, 220);
+      S.addWire(460, 220, 540, 220); S.addWire(540, 220, 540, 260);
+      S.addWire(460, 140, 620, 140); S.addWire(620, 140, 620, 160);
+      S.addWire(620, 220, 620, 300); S.addWire(620, 300, 580, 300);
+      S.addWire(540, 340, 540, 420); S.addWire(540, 420, 380, 420);
+      S.addWire(100, 160, 100, 420); S.addWire(100, 420, 380, 420);
+      S.addWire(240, 160, 240, 420); S.addWire(380, 160, 380, 420);
+      S.addWire(380, 420, 380, 460);
+      s.analysis.type = "op";
+    }, "t");
+    try {
+      const r = await L.simulate(S.state);
+      const t = r.traces.find((x) => x.name.toLowerCase() === "v(out)");
+      return t ? t.values[0] : null;
+    } catch (e) { return e.message; }
+  };
+  return { above: await read(2), below: await read(0.5) };
+});
+check("a comparator's open-collector output only pulls low",
+  cmp.above > 4 && cmp.below < 0.3, JSON.stringify(cmp));
+
+const zen = await build(
+  [{ type: "V", x: 100, y: 100, label: "VS", fields: { value: "DC 10", ac: "", rot: 90 } },
+   { type: "R", x: 200, y: 40, label: "R1", fields: { value: "1k" } },
+   { type: "ZENER", x: 320, y: 100, label: "DZ", fields: { model: "D1N750", rot: 270 } },
+   { type: "NET", x: 320, y: 40, fields: { name: "OUT" } },
+   { type: "GND", x: 100, y: 220 }, { type: "GND", x: 320, y: 220 }],
+  [[100, 100, 100, 40], [100, 40, 200, 40], [260, 40, 320, 40],
+   [320, 100, 320, 220], [100, 160, 100, 220]],
+  { type: "op" });
+check("a zener clamps at its breakdown voltage", Math.abs(zen.values["v(out)"]?.[0] - 4.7) < 0.3, zen.error || `${zen.values["v(out)"]?.[0]} V`);
+
+const misc = await page.evaluate(() => {
+  const L = window.__spiceLab, S = L.store;
+  S.clear();
+  let shapes = {};
+  S.edit(() => {
+    const g = S.addComp("GND", 100, 100, "GND");
+    const draw = () => L.parts.shapeOf(g).join("|");
+    const signal = draw();
+    g.style = "earth";
+    const earth = draw();
+    g.style = "chassis";
+    const chassis = draw();
+    shapes = { signal, earth, chassis, same: signal === earth || earth === chassis };
+    const b = S.addComp("BATT", 300, 100, "V"); b.value = "9";
+    const tp = S.addComp("TP", 500, 100, "TP"); tp.name = "TP1";
+    S.addWire(300, 100, 500, 100);
+  }, "t");
+  L.refresh();
+  return { shapes, netlist: document.getElementById("netOut").value };
+});
+check("ground has signal, earth and chassis symbols, all of them node 0", !misc.shapes.same,
+  `${misc.shapes.signal.slice(0, 16)} / ${misc.shapes.earth.slice(0, 16)} / ${misc.shapes.chassis.slice(0, 16)}`);
+check("a battery is a voltage source drawn as cells", / DC 9$/m.test(misc.netlist),
+  misc.netlist.split("\n").find((l) => /DC 9/.test(l)) || "no source");
+check("a test point names its node, like a net alias", /TP1/.test(misc.netlist),
+  misc.netlist.split("\n").filter((l) => /TP1/.test(l)).join(" | ") || "not named");
+
+console.log("\n— noise, temperature and Fourier —");
+
+const noise = await build(
+  [{ type: "ACSRC", x: 100, y: 100, label: "VS", fields: { ac: "1", dc: "0", ampl: "", freq: "1k", rot: 90 } },
+   { type: "R", x: 200, y: 40, label: "R1", fields: { value: "10k" } },
+   { type: "C", x: 320, y: 100, label: "C1", fields: { value: "1n", ic: "", rot: 90 } },
+   { type: "NET", x: 320, y: 40, fields: { name: "OUT" } },
+   { type: "GND", x: 100, y: 220 }, { type: "GND", x: 320, y: 220 }],
+  [[100, 100, 100, 40], [100, 40, 200, 40], [260, 40, 320, 40], [320, 40, 320, 100],
+   [320, 160, 320, 220], [100, 160, 100, 220]],
+  { type: "noise", noiseOut: "OUT", noiseSrc: "VS", noisePts: "10", noiseStart: "10", noiseStop: "1k" });
+check("a noise analysis reports output and input noise",
+  noise.names.some((n) => /onoise/i.test(n)) && noise.names.some((n) => /inoise/i.test(n)), noise.error || noise.names.join(", "));
+const nv = noise.values[Object.keys(noise.values).find((k) => /onoise/i.test(k)) || ""];
+check("a 10k resistor's thermal noise is about 12.8 nV per root hertz",
+  nv && Math.abs(nv[0] - 12.8e-9) < 1.5e-9, nv ? `${(nv[0] * 1e9).toFixed(1)} nV/root Hz` : "no trace");
+
+const temps = await build(
+  [{ type: "V", x: 100, y: 100, label: "VS", fields: { value: "DC 5", ac: "", rot: 90 } },
+   { type: "R", x: 200, y: 40, label: "R1", fields: { value: "10k" } },
+   { type: "D", x: 320, y: 100, label: "D1", fields: { model: "D1N4148", rot: 90 }, net: "OUT" },
+   { type: "GND", x: 100, y: 220 }, { type: "GND", x: 320, y: 220 }],
+  [[100, 100, 100, 40], [100, 40, 200, 40], [260, 40, 320, 40], [320, 40, 320, 100],
+   [320, 160, 320, 220], [100, 160, 100, 220]],
+  { type: "op", tempOn: true, tempList: "0 27 85" });
+const drops = Object.entries(temps.values).filter(([k]) => /^v\(out\)/.test(k)).map(([, v]) => v[0]);
+check("a temperature sweep runs once at each temperature", drops.length === 3, temps.error || `${drops.length} runs`);
+check("and a diode's forward drop falls with temperature, by roughly 2 mV per degree",
+  drops.length === 3 && drops[0] > drops[1] && drops[1] > drops[2] && Math.abs((drops[0] - drops[2]) / 85 - 0.002) < 0.001,
+  drops.map((d) => d.toFixed(3)).join(" to "));
+
+const four = await build(
+  [{ type: "ACSRC", x: 100, y: 100, label: "VS", fields: { ac: "1", dc: "0", ampl: "10", freq: "1k", rot: 90 } },
+   { type: "D", x: 160, y: 40, label: "D1", fields: { model: "D1N4148" } },
+   { type: "R", x: 300, y: 100, label: "RL", fields: { value: "1k", rot: 90 } },
+   { type: "NET", x: 300, y: 40, fields: { name: "OUT" } },
+   { type: "GND", x: 100, y: 220 }, { type: "GND", x: 300, y: 220 }],
+  [[100, 100, 100, 40], [100, 40, 160, 40], [220, 40, 300, 40], [300, 40, 300, 100],
+   [300, 160, 300, 220], [100, 160, 100, 220]],
+  { type: "tran", trStop: "5m", trStep: "1u", fourierOn: true, fourierFreq: "1k" }, {}, true);
+check("Fourier reports the harmonics of a probed trace", !!four.fourier && four.fourier.traces.length > 0,
+  four.error || JSON.stringify(four.fourier ? { traces: four.fourier.traces.length, f0: four.fourier.f0 } : null));
+if (four.fourier?.traces.length) {
+  const t = four.fourier.traces[0];
+  // For a half-wave rectified sine the nth harmonic is 2A/(pi(n^2-1)), so the
+  // second is about 42% of the fundamental and the THD lands near 43%. The
+  // diode's own drop pushes both a little higher.
+  check("the fundamental of a half-wave rectified sine is about half the peak",
+    Math.abs(t.harmonics[0].mag - 4.6) < 0.7, `${t.harmonics[0].mag.toFixed(2)} V`);
+  check("its second harmonic is a little over 40% of the fundamental",
+    t.harmonics[1].relative > 0.38 && t.harmonics[1].relative < 0.54, `${(t.harmonics[1].relative * 100).toFixed(0)} %`);
+  check("and the distortion figure lands near the 43% a half-wave rectifier gives",
+    t.thd > 0.36 && t.thd < 0.6, `THD ${(t.thd * 100).toFixed(0)} %`);
+}
+const badFourier = await page.evaluate(() => {
+  window.__spiceLab.store.edit((s) => { s.analysis.fourierFreq = ""; }, "t");
+  window.__spiceLab.refresh();
+  return document.getElementById("checks").textContent;
+});
+check("Fourier without a fundamental is explained", /fundamental frequency/i.test(badFourier), badFourier.slice(0, 120));
 
 console.log("\n— printing and lab authoring —");
 

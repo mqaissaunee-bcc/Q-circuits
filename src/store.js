@@ -28,7 +28,13 @@ export const DEFAULT_ANALYSIS = {
   paramOn: false, paramName: "", paramMode: "lin",
   paramStart: "", paramStop: "", paramStep: "", paramList: "",
   // PSpice's "Initialize all flip-flops to": X leaves it to the solver.
-  ffInit: "X"
+  ffInit: "X",
+  // Noise analysis: what is measured, and which source it is referred back to.
+  noiseOut: "", noiseSrc: "", noisePts: "20", noiseStart: "10", noiseStop: "100k",
+  // A run at each temperature, like PSpice's temperature sweep.
+  tempOn: false, tempList: "0 27 85",
+  // Fourier on a transient run: the fundamental to measure harmonics against.
+  fourierOn: false, fourierFreq: ""
 };
 
 /**

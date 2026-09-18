@@ -16,7 +16,7 @@
  */
 
 import { PARTS, netlistNameOf, isVirtual, netNameOf } from "./parts.js";
-import { buildNodes, buildNetlist, nodesFor, nodeAtPoint, paramValues, parseValue, formatEng } from "./netlist.js";
+import { buildNodes, buildNetlist, nodesFor, nodeAtPoint, paramValues, temperatures, parseValue, formatEng } from "./netlist.js";
 import { runNetlist } from "./engine.js";
 
 export const STEP_SEP = " \u00B7 ";
@@ -264,22 +264,38 @@ export async function simulate(state, onProgress, analysis = state.analysis) {
   const values = paramValues(analysis);
   const net = buildNodes(state.comps, state.wires);
 
-  if (!values) {
-    const { text } = buildNetlist(state.comps, state.wires, analysis, state.title, { saves });
+  const temps = temperatures(analysis);
+  const key = analysis.paramOn ? String(analysis.paramName).trim().toLowerCase() : null;
+  const pname = String(analysis.paramName || "").trim();
+
+  // One run per parameter value, per temperature. Either can be off, and
+  // with both on it is every combination, which is why the cap matters.
+  const runsWanted = [];
+  (values || [null]).forEach((v) => {
+    (temps || [null]).forEach((t) => {
+      const bits = [];
+      if (v !== null) bits.push(`${pname}=${formatEng(v, 4)}`);
+      if (t !== null) bits.push(`${formatEng(t, 3)}\u00B0C`);
+      runsWanted.push({ value: v, temp: t, suffix: bits.length ? `${STEP_SEP}${bits.join(", ")}` : "" });
+    });
+  });
+
+  if (runsWanted.length === 1 && !runsWanted[0].suffix) {
+    const { text } = buildNetlist(state.comps, state.wires, analysis, state.title,
+      { saves, temp: runsWanted[0].temp });
     const result = await run(text, onProgress);
     result.netlist = text;
     addDerived(result, state, net, analysis, [paramDefaults(state)]);
-    return result;
+    return withFourier(result, state, analysis);
   }
 
-  const pname = String(analysis.paramName).trim();
-  const key = pname.toLowerCase();
   const runs = [];
   let first = "";
-  for (let k = 0; k < values.length; k++) {
-    onProgress?.(`Parametric run ${k + 1} of ${values.length}: ${pname} = ${formatEng(values[k], 4)}`);
+  for (let k = 0; k < runsWanted.length; k++) {
+    const { value, temp, suffix } = runsWanted[k];
+    onProgress?.(`Run ${k + 1} of ${runsWanted.length}${suffix ? `: ${suffix.replace(STEP_SEP, "")}` : ""}`);
     const { text } = buildNetlist(state.comps, state.wires, analysis, state.title,
-      { saves, overrides: { [key]: values[k] } });
+      { saves, temp, overrides: value === null ? {} : { [key]: value } });
     if (!k) first = text;
     runs.push(await run(text, k ? undefined : onProgress));
   }
@@ -287,7 +303,7 @@ export async function simulate(state, onProgress, analysis = state.analysis) {
   const base = runs[0];
   const grid = base.sweep ? base.sweep.values : null;
   const traces = [];
-  const steps = values.map((v) => ({ name: pname, value: v, suffix: `${STEP_SEP}${pname}=${formatEng(v, 4)}` }));
+  const steps = runsWanted.map(({ value, temp, suffix }) => ({ name: pname, value, temp, suffix }));
 
   runs.forEach((r, k) => {
     const needs = grid && r.sweep && !sameGrid(grid, r.sweep.values);
@@ -313,8 +329,72 @@ export async function simulate(state, onProgress, analysis = state.analysis) {
     steps,
     netlist: first
   };
-  addDerived(merged, state, net, analysis, values.map((v) => ({ ...defaults, [key]: v })));
-  return merged;
+  addDerived(merged, state, net, analysis, runsWanted.map(({ value }) => (value === null ? defaults : { ...defaults, [key]: value })));
+  return withFourier(merged, state, analysis);
+}
+
+/* ---------------------------------------------------------------- Fourier */
+
+/**
+ * Harmonics of a transient waveform, measured over a whole number of cycles
+ * at the end of the run, where a circuit has settled. ngspice's own .four
+ * writes to its log rather than to vectors, so this does the arithmetic:
+ * the waveform is resampled onto an even grid, then correlated with a sine
+ * and cosine at each harmonic.
+ */
+export function fourierOf(times, values, f0, harmonics = 9) {
+  const period = 1 / f0;
+  const end = times[times.length - 1];
+  const cycles = Math.max(1, Math.min(8, Math.floor((end - times[0]) / period)));
+  const span = cycles * period;
+  const start = end - span;
+  if (!(span > 0) || start < times[0]) return null;
+
+  const N = Math.max(256, 64 * harmonics);
+  const grid = Array.from({ length: N }, (_, i) => start + (span * i) / N);
+  const ys = [];
+  let j = 0;
+  for (const t of grid) {
+    while (j < times.length - 2 && times[j + 1] < t) j++;
+    const t0 = times[j], t1 = times[j + 1] ?? t0;
+    const f = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+    ys.push(values[j] + f * ((values[j + 1] ?? values[j]) - values[j]));
+  }
+
+  const dc = ys.reduce((a, b) => a + b, 0) / N;
+  const out = [];
+  for (let h = 1; h <= harmonics; h++) {
+    let re = 0, im = 0;
+    for (let i = 0; i < N; i++) {
+      const ang = (2 * Math.PI * h * i * cycles) / N;
+      re += ys[i] * Math.cos(ang);
+      im += ys[i] * Math.sin(ang);
+    }
+    re = (2 * re) / N;
+    im = (-2 * im) / N;
+    out.push({ harmonic: h, freq: h * f0, mag: Math.hypot(re, im), phase: (Math.atan2(im, re) * 180) / Math.PI });
+  }
+  const fundamental = out[0].mag;
+  const thd = fundamental > 0
+    ? Math.sqrt(out.slice(1).reduce((a, h) => a + h.mag * h.mag, 0)) / fundamental
+    : NaN;
+  out.forEach((h) => { h.relative = fundamental > 0 ? h.mag / fundamental : NaN; });
+  return { dc, cycles, thd, harmonics: out };
+}
+
+/** Attach harmonics to a transient result, when the analysis asked for them. */
+function withFourier(result, state, analysis) {
+  if (!analysis.fourierOn || analysis.type !== "tran" || !result.sweep) return result;
+  const f0 = parseValue(analysis.fourierFreq);
+  if (!(f0 > 0)) return result;
+  const times = result.sweep.values;
+  result.fourier = { f0, traces: [] };
+  probedTraces(result, state).traces.forEach((t) => {
+    if (t.complex) return;
+    const spectrum = fourierOf(times, t.values, f0);
+    if (spectrum) result.fourier.traces.push({ name: t.name, unit: t.type === "current" ? "A" : "V", ...spectrum });
+  });
+  return result;
 }
 
 /** The netlist the Netlist panel shows: the first run, saves included. */

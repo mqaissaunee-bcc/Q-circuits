@@ -162,6 +162,7 @@ export function analysisDirective(a) {
   switch (a.type) {
     case "op": return ".op";
     case "dc": return `.dc ${a.dcSrc} ${a.dcStart} ${a.dcStop} ${a.dcStep}`;
+    case "noise": return `.noise v(${a.noiseOut}) ${a.noiseSrc} dec ${a.noisePts} ${a.noiseStart} ${a.noiseStop}`;
     case "ac": return `.ac dec ${a.acPts} ${a.acStart} ${a.acStop}`;
     default: return `.tran ${a.trStep} ${a.trStop}${a.trUic ? " uic" : ""}`;
   }
@@ -178,6 +179,10 @@ function sweepSourceOf(comps, name) {
 }
 
 function resolveSweepSource(comps, a) {
+  if (a.type === "noise") {
+    const c = sweepSourceOf(comps, a.noiseSrc);
+    return c ? { ...a, noiseSrc: netlistNameOf(c) } : a;
+  }
   if (a.type !== "dc") return a;
   const c = sweepSourceOf(comps, a.dcSrc);
   return c ? { ...a, dcSrc: netlistNameOf(c) } : a;
@@ -212,6 +217,8 @@ export function buildNetlist(comps, wires, analysis, title = "Circuit from the s
   }
 
   lines.push("");
+  // One run per temperature, as PSpice's temperature sweep does.
+  if (extra.temp !== undefined && extra.temp !== null) lines.push(`.options temp=${extra.temp}`);
   if (extra.saves && extra.saves.length) lines.push(`.save all ${extra.saves.join(" ")}`);
   lines.push(analysisDirective(resolveSweepSource(comps, analysis)));
   lines.push(".end");
@@ -250,7 +257,9 @@ export function validate(comps, wires, net, analysis) {
     const def = PARTS[c.type];
     const who = def.virtual ? `A ${def.name.toLowerCase()}` : c.label;
     def.fields.forEach((f) => {
-      if (f.k === "ic" || f.k === "ac") return;
+      // Optional fields fall back to their default when left alone, so an
+      // older circuit without them is not suddenly wrong.
+      if (f.k === "ic" || f.k === "ac" || f.optional) return;
       const v = String(c[f.k] ?? "").trim();
       if (!v) {
         msgs.push({ level: "error", text: `${who} has no ${f.label.toLowerCase()}.` });
@@ -359,6 +368,20 @@ export function validate(comps, wires, net, analysis) {
       }
     });
   });
+  if (analysis.type === "noise") {
+    const out = String(analysis.noiseOut || "").trim();
+    const src = String(analysis.noiseSrc || "").trim();
+    if (!out) msgs.push({ level: "error", text: "The noise analysis has no output node. Name the node whose noise you want, such as OUT." });
+    else if (!/^[A-Za-z0-9_]+$/.test(out)) msgs.push({ level: "error", text: `"${out}" is not a node name. Give a net alias, such as OUT.` });
+    if (!src) msgs.push({ level: "error", text: "The noise analysis has no input source. Name the source the noise is referred back to." });
+    else if (!sweepSourceOf(comps, src)) msgs.push({ level: "error", text: `The noise analysis names ${src}, which is not a source on the sheet.` });
+  }
+  if (analysis.tempOn && !temperatures(analysis)) {
+    msgs.push({ level: "error", text: "The temperature sweep has no usable list. Separate temperatures with spaces, such as 0 27 85." });
+  }
+  if (analysis.fourierOn && !(parseValue(analysis.fourierFreq) > 0)) {
+    msgs.push({ level: "error", text: "Fourier needs the fundamental frequency of the waveform, such as 1k." });
+  }
   if (analysis.paramOn) {
     const want = String(analysis.paramName || "").trim();
     if (!want) msgs.push({ level: "error", text: "The parametric sweep is on but has no parameter name." });
@@ -418,6 +441,14 @@ export function paramValues(a) {
   }
   if (!vals.length || vals.some((v) => !isFinite(v)) || vals.length > PARAM_RUN_LIMIT) return null;
   return vals;
+}
+
+/** Temperatures to run at, or null when the sweep is off or malformed. */
+export function temperatures(a) {
+  if (!a?.tempOn) return null;
+  const list = String(a.tempList || "").split(/[\s,]+/).filter(Boolean).map(parseValue);
+  if (!list.length || list.some((t) => !isFinite(t)) || list.length > PARAM_RUN_LIMIT) return null;
+  return list;
 }
 
 export { PARAM_RUN_LIMIT };
