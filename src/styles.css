@@ -684,3 +684,19 @@ dl.shortcuts kbd {
   /* One tidy page each for the circuit and the results. */
   @page { margin: 12mm; }
 }
+
+/*
+ * Lab view: the parts and settings the ELEC 101 labs use. Hiding is all it
+ * does — a circuit drawn here works in full view and the other way round.
+ */
+.view-condensed #btnLabSource,
+.view-condensed #fieldsNoise,
+.view-condensed .param-box:has(#fourierOn),
+.view-condensed .param-box:has(#tempOn),
+.view-condensed .workspace > .panel[aria-labelledby="netHead"] { display: none; }
+/*
+ * The parts table goes, but the warnings under it stay: Lab 4A has students
+ * hunt errors by them, and 14B expects the one about its missing ground.
+ */
+.view-condensed .parts-table { display: none; }
+#btnViewMode[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }

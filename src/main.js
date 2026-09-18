@@ -6,7 +6,7 @@
  * the validation messages from ever disagreeing with what is on the sheet.
  */
 
-import { PARTS, PALETTE, PALETTE_TABS, PART_ICONS, pinsOf, netlistNameOf, isDigital, shapeOf, filledIndices } from "./parts.js";
+import { PARTS, PALETTE, PALETTE_TABS, PART_ICONS, LAB_PARTS, pinsOf, netlistNameOf, isDigital, shapeOf, filledIndices } from "./parts.js";
 import { buildNodes, nodesFor, validate, formatEng, paramValues, parseValue } from "./netlist.js";
 import { Store, DEFAULT_ANALYSIS, DEFAULT_PLOT, DEFAULT_TITLE_BLOCK } from "./store.js";
 import { createCanvas } from "./canvas.js";
@@ -56,6 +56,10 @@ $("btnDiagram").addEventListener("click", () => diagram.toggle());
 const scope = createScope({ host: $("scopeHost"), measureHost: $("measureHost"), onStatus: say });
 
 let currentLab = null;
+// Which view is on: the labs' parts and settings, or everything.
+const VIEW_KEY = "q-circuits-view-v1";
+const LAB_PART_SET = new Set(LAB_PARTS);
+let fullView = false;
 let lastResult = null;
 let running = false;
 
@@ -97,10 +101,13 @@ Object.keys(PALETTE_TABS).forEach((tab) => {
   });
 });
 
+let currentTab = "analog";
+
 /** Show one part set. Keyboard shortcuts reach every part either way. */
 function setPaletteTab(tab) {
+  currentTab = tab;
   partTools.querySelectorAll("[data-tab]").forEach((b) => b.setAttribute("aria-pressed", b.dataset.tab === tab ? "true" : "false"));
-  partTools.querySelectorAll("[data-tab-part]").forEach((b) => { b.hidden = b.dataset.tabPart !== tab; });
+  applyViewMode();
 }
 tabRow.addEventListener("click", (evt) => {
   const b = evt.target.closest("[data-tab]");
@@ -110,6 +117,11 @@ tabRow.addEventListener("click", (evt) => {
 });
 setPaletteTab("analog");
 void PALETTE;
+
+try {
+  const saved = localStorage.getItem(VIEW_KEY);
+  if (saved) fullView = saved === "full";
+} catch { /* storage blocked */ }
 
 /**
  * A palette button draws the part's own symbol, taken from the same shape
@@ -757,6 +769,48 @@ function showRunError(message, netlist) {
 
 $("btnRun").addEventListener("click", run);
 
+/* ------------------------------------------------------------ view mode */
+
+/**
+ * Two views of the same tool. The condensed one shows the parts and settings
+ * the labs use; the full one shows everything. It only changes what is on
+ * screen: a circuit drawn in one view works in the other, and a part already
+ * on the sheet stays in the palette whichever view is on, so nothing a
+ * student has drawn can become unreachable.
+ */
+function applyViewMode() {
+  document.body.classList.toggle("view-condensed", !fullView);
+  const b = $("btnViewMode");
+  b.setAttribute("aria-pressed", fullView ? "true" : "false");
+  b.textContent = fullView ? "Lab view" : "Full view";
+  b.title = fullView
+    ? "Show only the parts and settings the labs use"
+    : "Show every part and analysis Q Circuits has";
+
+  const onSheet = new Set(store.state.comps.map((c) => c.type));
+  partTools.querySelectorAll("[data-tab-part]").forEach((btn) => {
+    const inTab = btn.dataset.tabPart === currentTab;
+    const allowed = fullView || LAB_PART_SET.has(btn.dataset.tool) || onSheet.has(btn.dataset.tool);
+    btn.hidden = !inTab || !allowed;
+  });
+  // The noise analysis is not one the labs run.
+  const noise = $("anaType").querySelector('option[value="noise"]');
+  if (noise) noise.hidden = !fullView && store.state.analysis.type !== "noise";
+}
+
+function setViewMode(next, { announce = true } = {}) {
+  fullView = next === "full";
+  try { localStorage.setItem(VIEW_KEY, next); } catch { /* storage blocked */ }
+  applyViewMode();
+  if (announce) {
+    say(fullView
+      ? "Full view: every part and analysis is showing."
+      : "Lab view: the parts and settings the labs use. Your circuit is unchanged.");
+  }
+}
+
+$("btnViewMode").addEventListener("click", () => setViewMode(fullView ? "condensed" : "full"));
+
 /* ---------------------------------------------------------- title block */
 
 const TB_INPUTS = { name: "tbName", course: "tbCourse", org: "tbOrg", date: "tbDate" };
@@ -850,6 +904,7 @@ $("btnAxisAuto").addEventListener("click", () => {
   store.save();
   syncPlotInputs();
   syncTitleBlock();
+  applyViewMode();
   say("Both axes are automatic again.");
 });
 
@@ -985,6 +1040,8 @@ function setLab(lab) {
   store.currentLabId = lab ? lab.id : "";
   $("btnDiagram").hidden = !lab;
   diagram.setLab(lab);
+  // A lab opens in the view its parts belong to; free build opens in full.
+  setViewMode(lab ? "condensed" : "full", { announce: false });
   if (lab) setPaletteTab(/^e101-1[01]/.test(lab.id) ? "digital" : "analog");
   $("checkResults").replaceChildren();
   if (!lab) { clearLabPanel(); return; }
@@ -1419,6 +1476,8 @@ function refresh() {
   renderPartsTable(net);
   renderChecks(validate(store.state.comps, store.state.wires, net, store.state.analysis));
   syncPlotInputs();
+  // Keep the palette in step: a part on the sheet stays reachable.
+  applyViewMode();
 
   $("btnUndo").disabled = !store.canUndo();
   $("btnRedo").disabled = !store.canRedo();

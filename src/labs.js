@@ -1581,7 +1581,7 @@ const ELEC101 = [
       "Set the values: R1 = 100, R2 = 300, VS = DC 12. Double-click a value to change it.",
       "Wire the loop: VS + up and across to R1, R1 across and down to R2, R2 down and back to VS −. Then place a ground on the bottom wire.",
       "Pick Net alias (K). Put A on the corner between VS and R1, and B on the corner between R1 and R2.",
-      "Open the Netlist panel: the nodes are now called A and B instead of numbers. Enter how many nodes there are above ground."
+      "Press Full view above the sheet and open the Netlist panel: the nodes are now called A and B instead of numbers. Enter how many nodes there are above ground, then switch back to Lab view if you like."
     ],
     questions: [
       { id: "nodes", prompt: "Nodes above ground", abs: 0, expect: () => 2 }

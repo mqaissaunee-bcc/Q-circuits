@@ -651,6 +651,30 @@ Each sheet carries a short **check code** over the student, exercise, date
 and score. It is a checksum, not a signature: it catches a sheet edited after
 the fact and would not stop a determined forgery.
 
+### Lab view and full view
+
+The button above the sheet switches between two views of the same tool.
+
+**Lab view** shows the 24 parts the ELEC 101 labs use (`LAB_PARTS` in
+`src/parts.js`, worked out from their reference diagrams) and hides the
+netlist panel, the parts table, the instructor's *Copy as lab diagram*, and
+the analyses the labs never run: noise, temperature sweep and Fourier.
+**Full view** shows everything.
+
+It only changes what is on screen. A circuit drawn in one view works in the
+other, keyboard shortcuts still reach every part, and a part already on the
+sheet stays in the palette whichever view is on, so nothing a student has
+drawn can become unreachable.
+
+Opening a lab switches to lab view; free build switches to full. Either can
+be overridden with the button, and the choice is remembered until the context
+changes again.
+
+Two things stay visible in lab view on purpose. The **warnings** under the
+parts table, because Lab 4A has students hunt its errors by them and 14B
+expects the one about its missing ground. And the **netlist**, which Lab 6A
+asks students to read: its task now tells them to press Full view for it.
+
 ### Palette icons
 
 Each part button draws its own symbol, built from the same shape data the

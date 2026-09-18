@@ -1226,6 +1226,15 @@ export const PARTS = {
   }
 };
 
+/**
+ * What the ELEC 101 labs actually use, worked out from their reference
+ * diagrams. The condensed view shows these and hides the rest, which are
+ * there for circuits beyond the labs.
+ */
+export const LAB_PARTS = ["R", "C", "V", "VPULSE", "D", "XFORM", "GND", "NET", "PWR", "PORT", "PARAM",
+  "NPN", "NJF", "OPAMP5",
+  "GATE2", "GATE3", "INV", "JKFF", "MUX151", "DEC154", "STIM", "DCLK", "DHI", "BUSENTRY"];
+
 /** The palette's two tabs. Ground and net aliases belong to both. */
 export const PALETTE_TABS = {
   analog: ["R", "POT", "C", "L", "V", "ACSRC", "VPULSE", "BATT", "I", "D", "ZENER", "SCHOTTKY", "LED", "BRIDGE",

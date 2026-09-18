@@ -1560,6 +1560,66 @@ const badFourier = await page.evaluate(() => {
 });
 check("Fourier without a fundamental is explained", /fundamental frequency/i.test(badFourier), badFourier.slice(0, 120));
 
+console.log("\n— lab view and full view —");
+const views = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  L.freshLabs();
+  const sel = document.getElementById("labSelect");
+  sel.value = "e101-07a"; sel.dispatchEvent(new Event("change"));
+  const shown = (sel2) => { const e = document.querySelector(sel2); return !!e && getComputedStyle(e).display !== "none"; };
+  const palette = () => [...document.querySelectorAll("#partTools button[data-tool]")].filter((b) => !b.hidden).map((b) => b.dataset.tool);
+  const lab = {
+    mode: document.getElementById("btnViewMode").getAttribute("aria-pressed"),
+    parts: palette(),
+    netlist: shown('.workspace > .panel[aria-labelledby="netHead"]'),
+    partsTable: shown(".parts-table"),
+    warnings: shown("#checks"),
+    fourier: shown(".param-box:has(#fourierOn)"),
+    authoring: shown("#btnLabSource")
+  };
+  document.getElementById("btnViewMode").click();
+  const full = { mode: document.getElementById("btnViewMode").getAttribute("aria-pressed"), parts: palette(), netlist: shown('.workspace > .panel[aria-labelledby="netHead"]'), fourier: shown(".param-box:has(#fourierOn)") };
+  document.getElementById("btnViewMode").click();
+  return { lab, full };
+});
+check("opening a lab switches to lab view", views.lab.mode === "false");
+check("lab view shows the parts the labs use and hides the rest",
+  views.lab.parts.includes("R") && views.lab.parts.includes("V") && !views.lab.parts.includes("TIMER555") && !views.lab.parts.includes("POT"),
+  views.lab.parts.join(" "));
+check("it hides the netlist, the parts table and the extra analyses",
+  !views.lab.netlist && !views.lab.partsTable && !views.lab.fourier && !views.lab.authoring, JSON.stringify(views.lab).slice(0, 160));
+check("but keeps the warnings, which Labs 4A and 14B send students to", views.lab.warnings);
+check("full view brings everything back", views.full.mode === "true" && views.full.netlist && views.full.fourier && views.full.parts.length > views.lab.parts.length,
+  `${views.lab.parts.length} parts in lab view, ${views.full.parts.length} in full`);
+
+const freeBuild = await page.evaluate(() => {
+  const sel = document.getElementById("labSelect");
+  sel.value = ""; sel.dispatchEvent(new Event("change"));
+  return document.getElementById("btnViewMode").getAttribute("aria-pressed");
+});
+check("free build opens in full view", freeBuild === "true");
+
+const kept = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  L.store.edit(() => { L.store.addComp("TIMER555", 300, 300, "U"); }, "t");
+  const sel = document.getElementById("labSelect");
+  sel.value = "e101-07a"; sel.dispatchEvent(new Event("change"));      // back to lab view
+  L.store.edit(() => { L.store.addComp("TIMER555", 300, 300, "U"); }, "t");
+  L.refresh();
+  const btn = document.querySelector('#partTools button[data-tool="TIMER555"]');
+  return { hidden: btn.hidden, mode: document.getElementById("btnViewMode").getAttribute("aria-pressed") };
+});
+check("a part already on the sheet stays in the palette, whichever view is on", !kept.hidden, JSON.stringify(kept));
+
+const shortcut = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  L.store.clear();
+  // N is the inductor, a part lab view hides.
+  document.querySelector("#sheetHost svg").dispatchEvent(new KeyboardEvent("keydown", { key: "n", bubbles: true }));
+  return L.canvas.getTool();
+});
+check("keyboard shortcuts still reach parts the view hides", shortcut === "L", shortcut);
+
 console.log("\n— printing and lab authoring —");
 
 // What the print rules leave on the page.
