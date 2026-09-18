@@ -90,6 +90,8 @@
                 title="Draw a title block in the corner of the sheet, which exports with it">Title block</button>
         <button type="button" id="btnBias" class="ghost" aria-pressed="false"
                 title="Print the operating-point voltage at every node, like PSpice's V button">Show DC voltages</button>
+        <button type="button" id="btnPrint" class="ghost"
+                title="Print the schematic and the plot, without the panels">Print</button>
         <button type="button" id="btnPngSheet" class="ghost">Export PNG</button>
       </span>
     </h2>
@@ -304,6 +306,8 @@
       <span class="head-actions">
         <button type="button" id="btnCopyNet" class="ghost">Copy</button>
         <button type="button" id="btnCir" class="ghost">Download .cir</button>
+        <button type="button" id="btnLabSource" class="ghost"
+                title="Copy this sheet as a lab reference diagram, to paste into src/labs.js">Copy as lab diagram</button>
       </span>
     </h2>
     <div class="panel-body">

@@ -15,7 +15,7 @@
  *   the parameter overridden, merged into one result afterwards.
  */
 
-import { PARTS, netlistNameOf } from "./parts.js";
+import { PARTS, netlistNameOf, isVirtual, netNameOf } from "./parts.js";
 import { buildNodes, buildNetlist, nodesFor, nodeAtPoint, paramValues, parseValue, formatEng } from "./netlist.js";
 import { runNetlist } from "./engine.js";
 
@@ -230,7 +230,36 @@ function sameGrid(a, b) {
  * Returns the engine result, plus `steps` when a parametric sweep ran, plus
  * `netlist`, the text of the first run.
  */
+/**
+ * Nodes with a single pin on them have no path for current, and ngspice does
+ * not fail on those: it iterates until something gives up. A half-built sheet
+ * would freeze the page, so the run is refused before it starts.
+ */
+function floatingNodes(state) {
+  const net = buildNodes(state.comps, state.wires);
+  const named = new Map();
+  state.comps.forEach((c) => {
+    const def = PARTS[c.type];
+    // Labels and ports count as a connection; a bus label names a bus, and
+    // a bus carries no current, so it does not.
+    if (isVirtual(c) && !(def.countsAsPin && (!def.netName || netNameOf(c)))) return;
+    nodesFor(c, net).forEach((nd, i) => {
+      if (nd === 0 || nd === undefined) return;
+      if ((net.pinCount.get(nd) || 0) >= 2) return;
+      if (!named.has(nd)) named.set(nd, `${c.label} ${PARTS[c.type].pinNames[i] || ""}`.trim());
+    });
+  });
+  return [...named.entries()].map(([node, where]) => ({ node, where }));
+}
+
 export async function simulate(state, onProgress, analysis = state.analysis) {
+  const loose = floatingNodes(state);
+  if (loose.length) {
+    const list = loose.slice(0, 3).map((f) => f.where).join(", ");
+    throw new Error(`Nothing is connected to ${list}${loose.length > 3 ? `, and ${loose.length - 3} more` : ""}. `
+      + "A pin with nothing on it has no path for current, and the simulator would spin rather than stop. "
+      + "Wire it up, or delete the part, and run again.");
+  }
   const saves = savesFor(state, analysis);
   const values = paramValues(analysis);
   const net = buildNodes(state.comps, state.wires);

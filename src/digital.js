@@ -57,10 +57,10 @@ function delayCap(name) {
  * Netlist lines for one gate. `name` must be unique in the netlist; `ins`
  * are input nodes, `out` the output node.
  */
-export function gateLines(name, fn, ins, out, { pullups = true } = {}) {
+export function gateLines(name, fn, ins, out, { pullups = true, rout = 1000 } = {}) {
   const lines = [
     `B${name} ${name}_o 0 V = ${LOGIC_HIGH}*${FN[fn](ins)}`,
-    `R${name}_d ${name}_o ${out} 1k`,
+    `R${name}_d ${name}_o ${out} ${rout}`,
     `C${name}_d ${out} 0 ${delayCap(name)}`
   ];
   if (pullups) {
@@ -78,10 +78,10 @@ export const logicOf = (n) => s(n);
  * A logic element with an arbitrary expression (0 to 1) over smoothed
  * inputs, for parts too wide to build gate by gate. `ins` get pull-ups.
  */
-export function logicLines(name, expr, ins, out) {
+export function logicLines(name, expr, ins, out, { rout = 1000 } = {}) {
   const lines = [
     `B${name} ${name}_o 0 V = ${LOGIC_HIGH}*(${expr})`,
-    `R${name}_d ${name}_o ${out} 1k`,
+    `R${name}_d ${name}_o ${out} ${rout}`,
     `C${name}_d ${out} 0 ${delayCap(name)}`
   ];
   ins.forEach((n, i) => {
@@ -173,6 +173,63 @@ export function timer555Lines(name, pins, drop = 1.7) {
     `R${n("o")} ${n("oraw")} ${out} 10`,
     `B${n("d")} ${disch} ${gnd} I = (${at(disch)}-${at(gnd)})*((1-${high})/12 + 1e-9)`
   ];
+}
+
+/**
+ * A positive-edge D flip-flop (a 7474 cell), as a master–slave pair of D
+ * latches: the master follows D while the clock is low, the slave copies it
+ * when the clock rises. PRE̅ and CLR̅ are active low and act at once.
+ */
+export function dffLines(name, { d, clk, pre, clr, q, qb }, init = "0") {
+  const n = (x) => `${name}_${x}`;
+  // A part without a preset or clear pin passes null. A pin wired to ground
+  // is a different thing: that asserts it, as a real 7474's would.
+  const has = (pin) => pin !== null && pin !== undefined;
+  const latch = (tag, dIn, en, outQ, outQb, withSet) => [
+    ...gateLines(n(`${tag}s`), "nand", [dIn, en], n(`${tag}sn`), { pullups: false }),
+    ...gateLines(n(`${tag}i`), "not", [dIn], n(`${tag}dn`), { pullups: false }),
+    ...gateLines(n(`${tag}r`), "nand", [n(`${tag}dn`), en], n(`${tag}rn`), { pullups: false }),
+    ...gateLines(n(`${tag}q`), "nand", withSet && has(pre) ? [n(`${tag}sn`), outQb, pre] : [n(`${tag}sn`), outQb], outQ, { pullups: false }),
+    ...gateLines(n(`${tag}qb`), "nand", withSet && has(clr) ? [n(`${tag}rn`), outQ, clr] : [n(`${tag}rn`), outQ], outQb, { pullups: false })
+  ];
+  const lines = [
+    ...gateLines(n("cn"), "not", [clk], n("clkn")),
+    ...latch("m", d, n("clkn"), n("my"), n("myb"), false),
+    ...latch("s", n("my"), clk, q, qb, true)
+  ];
+  [pre, clr].forEach((pin, i) => {
+    if (has(pin) && pin !== 0 && pin !== "0") lines.push(`R${name}_pu${i} ${pin} ${RAIL} 1meg`);
+  });
+  if (init === "0" || init === "1") {
+    const hi = init === "1";
+    const set = [[q, hi], [qb, !hi], [n("my"), hi], [n("myb"), !hi]]
+      .filter(([node]) => node !== 0 && node !== "0")
+      .map(([node, v]) => `V(${node})=${v ? LOGIC_HIGH : 0}`);
+    if (set.length) lines.push(`.ic ${set.join(" ")}`);
+  }
+  return lines;
+}
+
+/** Which digits light each segment of a seven-segment display. */
+export const SEGMENT_DIGITS = {
+  a: [0, 2, 3, 5, 6, 7, 8, 9], b: [0, 1, 2, 3, 4, 7, 8, 9], c: [0, 1, 3, 4, 5, 6, 7, 8, 9],
+  d: [0, 2, 3, 5, 6, 8, 9], e: [0, 2, 6, 8], f: [0, 4, 5, 6, 8, 9], g: [2, 3, 4, 5, 6, 8, 9]
+};
+
+/**
+ * 7447 BCD to seven-segment decoder. Outputs are active low, because the
+ * part is built to sink current from a common-anode display.
+ */
+export function decoder7447Lines(name, bcd, outs, blankInput) {
+  const digit = (k) => bcd.map((pin, b) => (((k >> b) & 1) ? s(pin) : `(1-${s(pin)})`)).join("*");
+  return Object.keys(SEGMENT_DIGITS).flatMap((seg, i) => {
+    const on = SEGMENT_DIGITS[seg].map(digit).join("+");
+    // Blanking input low turns every segment off.
+    const lit = blankInput ? `(${on})*${s(blankInput)}` : `(${on})`;
+    // A decoder drives a display, so its outputs are stiffer than a gate's:
+    // 1 kΩ in series would sag to a few volts under an LED's current.
+    return logicLines(`${name}_${seg}`, `1-${lit}`, i ? [] : [...bcd, ...(blankInput ? [blankInput] : [])], outs[i], { rout: 20 });
+  });
 }
 
 /* ------------------------------------------------------------- sources */

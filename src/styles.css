@@ -647,3 +647,40 @@ dl.shortcuts kbd {
 .tb-value { font-family: var(--mono); font-size: 14px; fill: var(--ink); }
 #btnTitleBlock[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
 .titleblock-box { border-top: 1px solid var(--rule); margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3) 0; }
+
+/* a lit LED or display segment, once a run says current is flowing */
+.part-path.is-lit { stroke: var(--danger); stroke-width: 4; }
+.part-path.is-lit.is-filled { fill: var(--danger); }
+
+/* cursor readout under the plot */
+.cursor-readout { margin: var(--sp-2) 0; }
+.cursor-readout .measure-table { margin-bottom: var(--sp-1); }
+
+/*
+ * Printing. A lab hand-in is the schematic and the plot: the toolbars,
+ * panels and hints are working tools and do not belong on paper. The title
+ * block is part of the sheet, so it comes along.
+ */
+@media print {
+  :root { --panel: #fff; --panel-2: #fff; --ink: #000; --ink-soft: #333; --rule: #999; }
+  body { background: #fff; }
+  /* Working tools: none of this belongs on paper. */
+  .masthead, .toolbar-strip, .side, .site-footer, .hint-bar, .diagram-win,
+  .panel-body .btn-row, .axis-box, .titleblock-box, .scope-readout,
+  #runError, #engineNote, .head-actions, .legend button { display: none !important; }
+  /* Only the schematic and the results print; the netlist and the parts
+     table are for working, and the browser adds its own header anyway. */
+  .workspace > .panel:not(.sheet-panel):not(.scope-panel) { display: none !important; }
+  .workspace { display: block; max-width: none; padding: 0; }
+  .panel { border: none; box-shadow: none; break-inside: avoid; margin: 0 0 12mm; padding: 0; }
+  .panel h2 { font-size: 12pt; margin: 0 0 4mm; }
+  svg.sheet { width: 100%; height: auto; aspect-ratio: 1400 / 900; max-height: 165mm; }
+  /* The dot grid is a drawing aid, as in the PNG export. */
+  .grid-layer { display: none; }
+  .sheet-panel { break-after: page; }
+  .scope-canvas { width: 100%; height: auto; }
+  .measure-table { font-size: 9pt; }
+  .measure-table th, .measure-table td { padding: 1mm 2mm; }
+  /* One tidy page each for the circuit and the results. */
+  @page { margin: 12mm; }
+}

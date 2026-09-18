@@ -1125,6 +1125,168 @@ check("its output swings from ground to about 1.7 V below the supply", osc.lo < 
 const cap = astable.values["v(1)"] || Object.entries(astable.values).find(([k]) => /^v\(\d+\)$/.test(k))?.[1];
 void cap;
 
+console.log("\n— tier-one parts —");
+
+// A potentiometer splits its resistance at the wiper.
+const pot = await build(
+  [{ type: "V", x: 100, y: 100, label: "VS", fields: { value: "DC 10", ac: "", rot: 90 } },
+   { type: "GND", x: 100, y: 220 },
+   { type: "POT", x: 300, y: 160, label: "RP", fields: { value: "10k", wiper: "0.25" } },
+   { type: "NET", x: 340, y: 120, fields: { name: "W" } }],
+  [[100, 100, 100, 60], [100, 60, 300, 60], [300, 60, 300, 160],
+   [340, 120, 340, 100], [380, 160, 400, 160], [400, 160, 400, 220], [400, 220, 100, 220], [100, 160, 100, 220]],
+  { type: "op" });
+check("a potentiometer divides at its wiper", Math.abs(pot.values["v(w)"]?.[0] - 7.5) < 0.01,
+  `wiper at ${pot.values["v(w)"]?.[0]} V with the wiper 0.25 from end 1`);
+
+// The AC source is both a VAC and a VSIN.
+const acs = await build(
+  [{ type: "ACSRC", x: 100, y: 100, label: "VS", fields: { ac: "1", dc: "0", ampl: "5", freq: "1k" }, net: "IN" },
+   { type: "GND", x: 160, y: 160 },
+   { type: "R", x: 100, y: 100, label: "R1", fields: { value: "1k", rot: 90 } }],
+  [[160, 100, 160, 160], [100, 160, 160, 160]],
+  { type: "tran", trStop: "2m", trStep: "10u" });
+check("the AC source carries an AC magnitude and a sine together",
+  /^VS \S+ \S+ DC 0 AC 1 SIN\(0 5 1k\)$/m.test(acs.netlist), acs.netlist.split("\n").find((l) => l.startsWith("VS")));
+
+// A 7447 lights the right segments for each digit.
+const seven = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  const out = [];
+  for (let digit = 0; digit < 10; digit++) {
+    L.freshLabs();
+    S.clear();
+    S.edit((s) => {
+      const add = (type, x, y, f = {}) => { const c = S.addComp(type, x, y, type === "GND" ? "GND" : "X"); Object.assign(c, f); return c; };
+      add("DEC7447", 400, 200, { label: "U1", device: "7447" });
+      ["A", "B", "C", "D"].forEach((bit, b) => {
+        const v = add("V", 100, 140 + b * 80, { label: `V${bit}`, value: `DC ${(digit >> b) & 1 ? 5 : 0}`, ac: "", rot: 90 });
+        const n = S.addComp("NET", v.x, v.y, "N"); n.name = bit;
+        add("GND", v.x, v.y + 60);
+        S.addWire(v.x, v.y, 400, 140 + b * 20);
+      });
+      const bi = add("V", 260, 400, { label: "VBI", value: "DC 5", ac: "", rot: 90 });
+      add("GND", 260, 460);
+      S.addWire(260, 400, 400, 260);
+      // name each segment output so the result can be read back
+      "abcdefg".split("").forEach((seg, k) => {
+        const n = S.addComp("NET", 520, 140 + k * 20, "N");
+        n.name = `S${seg.toUpperCase()}`;
+        S.addWire(520, 140 + k * 20, 560, 140 + k * 20);
+      });
+      s.analysis.type = "op";
+    }, "t");
+    const r = await L.simulate(S.state);
+    const lit = "abcdefg".split("").map((seg) => {
+      const t = r.traces.find((x) => x.name.toLowerCase() === `v(s${seg})`);
+      return t && t.values[0] < 2.5 ? 1 : 0;      // outputs are active low
+    }).join("");
+    out.push(lit);
+  }
+  return out;
+});
+const WANT = ["1111110", "0110000", "1101101", "1111001", "0110011", "1011011", "1011111", "1110000", "1111111", "1111011"];
+check("the 7447 lights the right segments for 0 to 9", seven.join(" ") === WANT.join(" "), seven.join(" "));
+
+// A 74164 shifts a 1 along on each rising clock edge.
+const shift = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  L.freshLabs();
+  S.clear();
+  S.edit((s) => {
+    const add = (type, x, y, f = {}) => { const c = S.addComp(type, x, y, type === "GND" ? "GND" : "X"); Object.assign(c, f); return c; };
+    add("SIPO", 400, 200, { label: "U1", device: "74164" });
+    const hi = add("DHI", 200, 140, {});
+    S.addWire(200, 140, 400, 120);                       // A
+    S.addWire(200, 140, 400, 140);                       // B
+    const clk = add("DCLK", 200, 300, { label: "DSTM1", offtime: "1m", ontime: "1m", delay: "0", startval: "0", oppval: "1" });
+    const cn = S.addComp("NET", 200, 300, "N"); cn.name = "CLOCK";
+    S.addWire(200, 300, 400, 180);
+    const clr = add("DHI", 200, 380, {});
+    S.addWire(200, 380, 400, 220);
+    "ABCDEFGH".split("").forEach((q, k) => {
+      const n = S.addComp("NET", 520, 130 + k * 20, "N"); n.name = `Q${q}`;
+      S.addWire(520, 130 + k * 20, 560, 130 + k * 20);
+    });
+    void hi; void clk; void clr;
+    Object.assign(s.analysis, { type: "tran", trStop: "12m", trStep: "0.1m", ffInit: "0" });
+  }, "t");
+  const r = await L.simulate(S.state);
+  const ts = r.sweep.values;
+  const at = (name, t) => {
+    const tr = r.traces.find((x) => x.name.toLowerCase() === `v(${name.toLowerCase()})`);
+    let k = 0; while (k < ts.length - 1 && ts[k + 1] <= t) k++;
+    return tr && tr.values[k] > 2.5 ? 1 : 0;
+  };
+  // rising edges at 1 ms, 3 ms, 5 ms …
+  return [1.5, 3.5, 5.5, 7.5].map((ms) => "ABCDEFGH".split("").map((q) => at(`q${q}`, ms * 1e-3)).join(""));
+});
+check("the 74164 shifts a one along, one place per clock", shift.join(" ") === "10000000 11000000 11100000 11110000", shift.join(" "));
+
+// A half-built sheet must be refused, not left to spin.
+const loose = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  L.freshLabs();
+  S.clear();
+  S.edit((s) => {
+    const add = (type, x, y, f = {}) => { const c = S.addComp(type, x, y, type === "GND" ? "GND" : "X"); Object.assign(c, f); return c; };
+    add("V", 100, 100, { label: "VS", value: "DC 5", ac: "", rot: 90 });
+    add("GND", 100, 160);
+    S.addWire(100, 100, 100, 160);
+    add("LED", 300, 300, { label: "D1", model: "DLED" });   // nothing attached
+    s.analysis.type = "op";
+  }, "t");
+  const started = Date.now();
+  try {
+    await L.simulate(S.state);
+    return { ran: true, ms: Date.now() - started };
+  } catch (e) { return { ran: false, ms: Date.now() - started, message: e.message }; }
+});
+check("a part with nothing attached stops the run instead of hanging the page",
+  !loose.ran && loose.ms < 1000 && /D1 anode/.test(loose.message), JSON.stringify(loose).slice(0, 200));
+
+console.log("\n— plot cursors —");
+await loadSolved("e101-07a");
+const cur = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  await L.run();
+  const n = L.getResult().sweep.values.length;
+  L.scope.placeCursor("a", Math.round(n * 0.25));
+  L.scope.placeCursor("b", Math.round(n * 0.75));
+  const rows = [...document.querySelectorAll(".cursor-readout tbody tr")].map((tr) => [...tr.children].map((c) => c.textContent));
+  return {
+    marks: L.scope.cursors(),
+    head: document.querySelector(".cursor-readout .measure-scope")?.textContent,
+    rows,
+    cols: [...document.querySelectorAll(".cursor-readout thead th")].map((t) => t.textContent)
+  };
+});
+check("two cursors can be placed on the plot", cur.marks.a !== null && cur.marks.b !== null, JSON.stringify(cur.marks));
+check("the readout has a column for each cursor and the difference",
+  cur.cols.join("|") === "Trace|at A|at B|\u0394", cur.cols.join("|"));
+check("it reports the gap between the cursors", /\u0394 12/.test(cur.head || ""), cur.head);
+check("and each trace's value at both cursors", /-4\.5/.test(cur.rows[0]?.[1] || "") && /4\.5/.test(cur.rows[0]?.[2] || ""), JSON.stringify(cur.rows[0]));
+const nudge = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  const before = L.scope.cursors().b;
+  document.querySelector(".scope-canvas").focus();
+  document.querySelector(".scope-canvas").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  return { before, after: L.scope.cursors().b };
+});
+check("an arrow key nudges the cursor last placed", nudge.after === nudge.before + 1, JSON.stringify(nudge));
+const cursorsGone = await page.evaluate(() => {
+  window.__spiceLab.scope.clearCursors();
+  return { marks: window.__spiceLab.scope.cursors(), table: document.querySelectorAll(".cursor-readout").length };
+});
+check("cursors can be cleared", cursorsGone.marks.a === null && cursorsGone.table === 0, JSON.stringify(cursorsGone));
+const afterRun = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  L.scope.placeCursor("a", 10);
+  await L.run();
+  return L.scope.cursors();
+});
+check("a new run clears cursors rather than pointing at stale samples", afterRun.a === null, JSON.stringify(afterRun));
+
 console.log("\n— title block and submission —");
 await loadSolved("e101-07a");
 const tbOff = await page.evaluate(() => document.querySelectorAll(".title-block").length);
@@ -1224,6 +1386,105 @@ if (process.env.SHOTS) {
   });
   await page.locator("#sheetHost").screenshot({ path: "/tmp/titleblock.png" });
 }
+
+console.log("\n— printing and lab authoring —");
+
+// What the print rules leave on the page.
+await loadSolved("e101-12a");
+await page.evaluate(async () => { await window.__spiceLab.run(); });
+await page.emulateMedia({ media: "print" });
+const printed = await page.evaluate(() => {
+  const shown = (sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return getComputedStyle(el).display !== "none" && r.width > 0;
+  };
+  return {
+    sheet: shown("#sheetHost svg"),
+    plot: shown(".scope-canvas"),
+    measurements: shown(".measure-table"),
+    toolbar: shown(".toolbar-strip"),
+    side: shown(".side"),
+    netlist: shown("#netOut"),
+    hints: shown(".hint-bar"),
+    grid: shown(".grid-layer"),
+    footer: shown(".site-footer")
+  };
+});
+check("printing keeps the schematic, the plot and the measurements",
+  printed.sheet && printed.plot && printed.measurements, JSON.stringify(printed));
+check("and leaves out the toolbar, panels, netlist, hints, footer and dot grid",
+  !printed.toolbar && !printed.side && !printed.netlist && !printed.hints && !printed.footer && !printed.grid, JSON.stringify(printed));
+await page.emulateMedia({ media: "screen" });
+
+const framed = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  L.canvas.setView({ x: 200, y: 200, w: 200, h: 130 });     // zoomed right in
+  const zoomed = L.canvas.getView();
+  window.dispatchEvent(new Event("beforeprint"));
+  const printing = L.canvas.getView();
+  window.dispatchEvent(new Event("afterprint"));
+  return { zoomed, printing, restored: L.canvas.getView() };
+});
+check("printing frames the whole circuit, however the student was zoomed",
+  framed.printing.w > framed.zoomed.w * 2, JSON.stringify({ zoomed: framed.zoomed.w, printing: Math.round(framed.printing.w) }));
+check("and puts the view back afterwards", framed.restored.w === framed.zoomed.w && framed.restored.x === framed.zoomed.x,
+  JSON.stringify(framed.restored));
+
+// Authoring: a sheet copied out and pasted back must be the same circuit.
+const round = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  const before = { netlist: document.getElementById("netOut").value, parts: L.store.state.comps.length };
+  const text = L.labDiagramSource(L.store.state);
+  const diagram = new Function(`return (${text.split("\n").filter((l) => !l.startsWith("//")).join("\n")})`)();
+  L.store.loadCircuit({ ...diagram, title: L.store.state.title });
+  L.refresh();
+  return {
+    text,
+    before,
+    after: { netlist: document.getElementById("netOut").value, parts: L.store.state.comps.length }
+  };
+});
+// A diagram holds parts, wires and probes; the analysis belongs to the lab
+// definition, and is noted in the comment rather than the data.
+const devicesOnly = (net) => net.split("\n").filter((l) => !/^[.*]/.test(l)).join("\n");
+check("a sheet copied as a lab diagram loads back as the same circuit",
+  devicesOnly(round.before.netlist) === devicesOnly(round.after.netlist) && round.before.parts === round.after.parts,
+  `${round.before.parts} parts vs ${round.after.parts}; netlist differs at: ${
+    (() => { const a = round.before.netlist.split("\n"), b = round.after.netlist.split("\n");
+      for (let i = 0; i < Math.max(a.length, b.length); i++) if (a[i] !== b[i]) return `"${a[i]}" vs "${b[i]}"`;
+      return "nowhere"; })()}`);
+check("the copied source is JavaScript ready to paste into the labs file",
+  /^\/\/ Reference diagram/.test(round.text) && /comps: \[/.test(round.text) && /wires: \[/.test(round.text),
+  round.text.split("\n").slice(0, 4).join(" / "));
+check("it records the settings the circuit was drawn with",
+  /\/\/ title: "LAB 12A"/.test(round.text) && /\/\/ analysis: \{[^}]*type: "ac"/.test(round.text),
+  round.text.split("\n").filter((l) => l.startsWith("//")).join(" / "));
+check("identifiers are left out, since they are handed out on loading", !/\bid:/.test(round.text));
+
+const authored = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  // a part with a mirror, a bus and a probe: the awkward cases
+  L.store.clear();
+  L.store.edit((s) => {
+    const c = L.store.addComp("NPN", 200, 200, "Q");
+    c.mx = true;
+    L.store.addWire(100, 400, 500, 400, true);
+    L.store.toggleProbe("v", "200,200", { x: 200, y: 200 });
+  }, "t");
+  return L.labDiagramSource(L.store.state);
+});
+check("mirrors, buses and probes survive the copy",
+  /mx: true/.test(authored) && /bus: true/.test(authored) && /kind: "v"/.test(authored),
+  authored.split("\n").filter((l) => /mx|bus|kind/.test(l)).join(" / "));
+const emptyCopy = await page.evaluate(async () => {
+  window.__spiceLab.store.clear();
+  document.getElementById("btnLabSource").click();
+  await new Promise((r) => setTimeout(r, 50));
+  return document.getElementById("status")?.textContent || document.querySelector("[role=status]")?.textContent || "";
+});
+check("copying an empty sheet says so rather than copying nothing", /nothing to copy/i.test(emptyCopy), emptyCopy);
 
 console.log("\n— palette icons —");
 const icons = await page.evaluate(() => {

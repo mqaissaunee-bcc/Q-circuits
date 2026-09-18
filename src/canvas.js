@@ -301,8 +301,10 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
         class: "part" + (sel ? " is-selected" : "") + (def.virtual ? " is-virtual" : "")
       }, g);
       const fills = filledIndices(c.type);
+      const lit = litPaths(c, def);
       shapeOf(c).forEach((d, i) => {
-        el("path", { d, class: fills.includes(i) ? "part-path is-filled" : "part-path" }, grp);
+        const cls = fills.includes(i) ? "part-path is-filled" : "part-path";
+        el("path", { d, class: lit.has(i) ? `${cls} is-lit` : cls }, grp);
       });
 
       pinsOf(c).forEach((p, i) => {
@@ -561,6 +563,34 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     store.state.notes.forEach((n) => add(n.x, n.y - 16, n.x + 220, n.y + 8));
     if (!isFinite(x0)) return { x0: 40, y0: 40, x1: 900, y1: 500 };
     return { x0, y0, x1, y1 };
+  }
+
+  /**
+   * Which paths of a symbol are lit by the last run: the segments of a
+   * display that are conducting, or an LED that is. Nothing is lit until a
+   * run has produced voltages for this exact circuit.
+   */
+  function litPaths(c, def) {
+    const none = new Set();
+    if (!bias || bias.signature !== signature()) return none;
+    if (!def.segmentPaths && !def.lights) return none;
+    const volts = (i) => {
+      const nd = net.pinNode.get(`${c.id}:${i}`);
+      if (nd === undefined) return NaN;
+      return nd === 0 ? 0 : bias.values.get(String(nd).toLowerCase());
+    };
+    const ON = 1.4;                       // a lit LED is a diode drop or so on
+    if (def.lights) {
+      return volts(0) - volts(1) > ON ? new Set([1, 2, 3]) : none;
+    }
+    const common = volts(def.pins.length - 1);
+    const out = new Set();
+    def.segmentPaths.forEach((path, k) => {
+      const v = volts(k);
+      const drive = c.common === "cathode" ? v - common : common - v;
+      if (drive > ON) out.add(path);
+    });
+    return out;
   }
 
   function signature() {
@@ -1137,6 +1167,14 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     contentBox,
 
     /** Freeze the accidental view gestures: wheel zoom and middle-drag pan. */
+    /** The visible window, for callers that need to put it back. */
+    getView: () => ({ ...view }),
+    setView(next) {
+      view = { ...next };
+      applyView();
+      render();
+    },
+
     setViewLocked(locked) {
       viewLocked = locked;
       svg.classList.toggle("is-locked", locked);

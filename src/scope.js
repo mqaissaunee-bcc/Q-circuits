@@ -130,7 +130,10 @@ export function createScope({ host, measureHost, onStatus }) {
   const canvas = document.createElement("canvas");
   canvas.className = "scope-canvas";
   canvas.setAttribute("role", "img");
-  canvas.setAttribute("aria-label", "Waveform plot. The measurements table below is the text equivalent.");
+  canvas.setAttribute("aria-label",
+    "Waveform plot. Click to place a cursor, shift-click for a second; the tables below are the text equivalent.");
+  // Focusable so the arrow keys can nudge a cursor.
+  canvas.tabIndex = 0;
   host.appendChild(canvas);
 
   const readout = document.createElement("div");
@@ -141,6 +144,9 @@ export function createScope({ host, measureHost, onStatus }) {
   let mode = "value";
   let hidden = new Set();
   let cursor = null;
+  // Two placed cursors, as sample indices, and which one a key press moves.
+  let marks = { a: null, b: null };
+  let lastMark = "a";
   let layout = null;
   let region = null;      // {i0, i1} sample range measurements are limited to
   let dragging = null;    // {x0, x1} in canvas pixels, while the pointer is down
@@ -390,6 +396,7 @@ export function createScope({ host, measureHost, onStatus }) {
     ctx.textAlign = "center"; ctx.textBaseline = "bottom";
     ctx.fillText(sweepLabel(), plot.x + plot.w / 2, h - 2);
 
+    drawMarks(ctx, c);
     if (cursor && !dragging) drawCursor(ctx, c);
     renderReadout(cursor && !dragging ? cursorIndex() : null);
     renderMeasurements();
@@ -416,6 +423,41 @@ export function createScope({ host, measureHost, onStatus }) {
   }
 
   const cursorIndex = () => (cursor ? indexAtPixel(cursor.x) : null);
+
+  /** The placed cursors: a solid line each, labelled A and B. */
+  function drawMarks(ctx, c) {
+    if (!layout || !result?.sweep) return;
+    ["a", "b"].forEach((which) => {
+      const i = marks[which];
+      if (i === null || i === undefined) return;
+      const x = layout.sx(result.sweep.values[i]);
+      ctx.save();
+      ctx.strokeStyle = c.accent;
+      ctx.lineWidth = 1.5;
+      layout.panes.forEach((pn) => {
+        ctx.beginPath();
+        ctx.moveTo(x, pn.box.y);
+        ctx.lineTo(x, pn.box.y + pn.box.h);
+        ctx.stroke();
+      });
+      visibleTraces().forEach((t) => {
+        const pn = layout.paneOf.get(t);
+        const v = seriesOf(t)[i];
+        if (!pn || !isFinite(v)) return;
+        ctx.fillStyle = c.traces[result.traces.indexOf(t) % c.traces.length];
+        ctx.beginPath();
+        ctx.arc(x, pn.sy(v), 4, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      const top = layout.panes[0].box;
+      ctx.fillStyle = c.accent;
+      ctx.font = '600 11px "IBM Plex Mono", ui-monospace, monospace';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(which.toUpperCase(), x, top.y - 2);
+      ctx.restore();
+    });
+  }
 
   function drawCursor(ctx, c) {
     const i = cursorIndex();
@@ -528,6 +570,7 @@ export function createScope({ host, measureHost, onStatus }) {
     if (!measureHost) return;
     measureHost.replaceChildren();
     if (!result || !result.sweep) return;
+    renderCursorTable();
 
     const xs = result.sweep.values;
     const [i0, i1] = measuredRange();
@@ -620,6 +663,72 @@ export function createScope({ host, measureHost, onStatus }) {
     measureHost.appendChild(table);
   }
 
+  /**
+   * What the cursors read: each trace at A, at B, and the difference. This
+   * is how the labs' −3 dB points and rise times get measured.
+   */
+  function renderCursorTable() {
+    const { a, b } = marks;
+    if (a === null && b === null) return;
+    const xs = result.sweep.values;
+    const both = a !== null && b !== null;
+
+    const wrap = document.createElement("div");
+    wrap.className = "cursor-readout";
+    const head = document.createElement("p");
+    head.className = "measure-scope";
+    head.textContent = both
+      ? `Cursors at ${formatEng(xs[a], 4)} and ${formatEng(xs[b], 4)} ${sweepUnit()}, \u0394 ${formatEng(xs[b] - xs[a], 4)} ${sweepUnit()}`
+      : `Cursor ${a !== null ? "A" : "B"} at ${formatEng(xs[a !== null ? a : b], 4)} ${sweepUnit()}. Shift-click the plot for the second one`;
+    wrap.appendChild(head);
+
+    const table = document.createElement("table");
+    table.className = "measure-table";
+    const cols = ["Trace", ...(a !== null ? ["at A"] : []), ...(b !== null ? ["at B"] : []), ...(both ? ["\u0394"] : [])];
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    cols.forEach((label, i) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      if (i) th.className = "num";
+      hr.appendChild(th);
+    });
+    thead.appendChild(hr);
+    table.appendChild(thead);
+
+    const body = document.createElement("tbody");
+    visibleTraces().forEach((t) => {
+      const series = seriesOf(t);
+      const unit = unitOf(t);
+      const tr = document.createElement("tr");
+      const name = document.createElement("th");
+      name.scope = "row";
+      name.textContent = t.name;
+      tr.appendChild(name);
+      const cell = (v) => {
+        const td = document.createElement("td");
+        td.className = "num";
+        td.textContent = isFinite(v) ? `${formatEng(v, 4)} ${unit}` : "—";
+        tr.appendChild(td);
+      };
+      if (a !== null) cell(series[a]);
+      if (b !== null) cell(series[b]);
+      if (both) cell(series[b] - series[a]);
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    wrap.appendChild(table);
+
+    const clear = document.createElement("button");
+    clear.type = "button";
+    clear.className = "ghost";
+    clear.textContent = "Clear cursors";
+    clear.addEventListener("click", clearMarks);
+    wrap.appendChild(clear);
+
+    measureHost.appendChild(wrap);
+  }
+
   /* ------------------------------------------------------------ pointer */
 
   const inPlot = (x) => layout && x >= layout.plot.x && x <= layout.plot.x + layout.plot.w;
@@ -648,8 +757,8 @@ export function createScope({ host, measureHost, onStatus }) {
     const { x0, x1 } = dragging;
     dragging = null;
     if (Math.abs(x1 - x0) < 5) {
-      // a click rather than a drag: go back to measuring everything
-      if (region) { region = null; onStatus?.("Measuring the whole sweep."); }
+      // A click places a cursor: the first one, or the second with shift.
+      placeMark(evt.shiftKey ? "b" : "a", indexAtPixel(x1));
     } else {
       const a = indexAtPixel(Math.min(x0, x1));
       const b = indexAtPixel(Math.max(x0, x1));
@@ -660,6 +769,41 @@ export function createScope({ host, measureHost, onStatus }) {
       }
     }
     draw();
+  });
+
+  /** Put a cursor on a sample and say what it reads. */
+  function placeMark(which, index) {
+    if (!result?.sweep) return;
+    marks[which] = index;
+    lastMark = which;
+    canvas.focus?.();
+    draw();
+    renderMeasurements();
+    const xs = result.sweep.values;
+    const first = visibleTraces()[0];
+    const value = first ? ` — ${first.name} is ${formatEng(seriesOf(first)[index], 4)} ${unitOf(first)}` : "";
+    onStatus?.(`Cursor ${which.toUpperCase()} at ${formatEng(xs[index], 4)} ${sweepUnit()}${value}. Shift-click for the other cursor; arrow keys nudge.`);
+  }
+
+  function clearMarks() {
+    marks = { a: null, b: null };
+    draw();
+    renderMeasurements();
+    onStatus?.("Cursors cleared.");
+  }
+
+  // Arrow keys nudge the cursor last placed, as PSpice's do.
+  canvas.addEventListener("keydown", (evt) => {
+    if (!result?.sweep || marks[lastMark] === null) return;
+    const step = evt.shiftKey ? 10 : 1;
+    if (evt.key === "ArrowLeft" || evt.key === "ArrowRight") {
+      evt.preventDefault();
+      const n = result.sweep.values.length;
+      placeMark(lastMark, Math.min(n - 1, Math.max(0, marks[lastMark] + (evt.key === "ArrowRight" ? step : -step))));
+    } else if (evt.key === "Escape") {
+      evt.preventDefault();
+      clearMarks();
+    }
   });
 
   canvas.addEventListener("pointerleave", () => {
@@ -677,6 +821,7 @@ export function createScope({ host, measureHost, onStatus }) {
       result = r;
       hidden = new Set();
       cursor = null;
+      marks = { a: null, b: null };
       region = null;
       dragging = null;
       mode = r && r.kind === "complex" ? "db" : "value";
@@ -688,6 +833,10 @@ export function createScope({ host, measureHost, onStatus }) {
     setRanges(r) { ranges = { ...r }; draw(); },
     /** Logic lanes: one 0/1 strip per trace, in probe order. */
     setDigital(on) { digital = !!on; },
+    /** Cursor sample indices, for tests and for the status line. */
+    cursors: () => ({ ...marks }),
+    placeCursor: (which, index) => placeMark(which, index),
+    clearCursors: clearMarks,
     isDigital: () => digital && !!layout?.panes?.[0]?.lane,
     paneCount: () => (layout?.panes?.length || 0),
     getMode: () => mode,

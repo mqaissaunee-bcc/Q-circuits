@@ -19,6 +19,7 @@ import { shareUrl, decodeCircuit, clearHash } from "./share.js";
 import { exportSvg, exportCanvas } from "./export-png.js";
 import { createDiagramWindow } from "./diagram.js";
 import { buildSubmissionSheet } from "./submission.js";
+import { labDiagramSource } from "./authoring.js";
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -804,6 +805,27 @@ $("acModes").addEventListener("click", (evt) => {
   say(`Plot showing ${b.textContent}.`);
 });
 
+/**
+ * Printing gives the schematic and the plot on paper, with the panels left
+ * out (see the print rules in styles.css). The sheet is framed to the whole
+ * circuit for the duration, whatever the student had zoomed in on, and put
+ * back afterwards.
+ */
+let viewBeforePrint = null;
+window.addEventListener("beforeprint", () => {
+  viewBeforePrint = canvas.getView();
+  canvas.fit();
+});
+window.addEventListener("afterprint", () => {
+  if (viewBeforePrint) canvas.setView(viewBeforePrint);
+  viewBeforePrint = null;
+});
+
+$("btnPrint").addEventListener("click", () => {
+  say("Opening the print dialog. The schematic and the plot print; the panels do not.");
+  window.print();
+});
+
 $("btnPngSheet").addEventListener("click", async () => {
   try {
     await exportSvg(canvas.svg, `${slug(store.state.title)}-schematic.png`, canvas.contentBox());
@@ -1287,6 +1309,28 @@ $("btnCopyNet").addEventListener("click", async () => {
   }
 });
 
+/**
+ * For whoever writes the labs: draw the circuit, then copy it out as the
+ * data a reference diagram is made of.
+ */
+$("btnLabSource").addEventListener("click", async () => {
+  if (!store.state.comps.length && !store.state.wires.length) {
+    say("The sheet is empty, so there is nothing to copy.");
+    return;
+  }
+  const text = labDiagramSource(store.state);
+  const parts = store.state.comps.length;
+  try {
+    await navigator.clipboard.writeText(text);
+    say(`Copied this sheet as a lab diagram: ${parts} part${parts === 1 ? "" : "s"}. Paste it into DIAGRAMS in src/labs.js.`);
+  } catch {
+    // Clipboard blocked: put it where it can be selected by hand.
+    $("netOut").value = text;
+    $("netOut").select();
+    say("Copy was blocked. The lab diagram is in the netlist box — press Ctrl or Command C. It reappears as a netlist on the next change.");
+  }
+});
+
 $("docTitle").addEventListener("input", () => {
   store.state.title = $("docTitle").value;
   store.save();
@@ -1395,4 +1439,4 @@ window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, 
     try { localStorage.removeItem("q-circuits-labwork-v1"); } catch { /* storage blocked */ }
   },
   currentLab: () => currentLab,
-  simulate, diagram, buildSubmissionSheet, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor } };
+  simulate, diagram, buildSubmissionSheet, labDiagramSource, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor } };

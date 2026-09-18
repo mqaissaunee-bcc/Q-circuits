@@ -7,7 +7,7 @@
  * netlist lines; `models` names any .model cards those lines depend on.
  */
 
-import { gateLines, logicLines, logicOf, jkffLines, timer555Lines, parseStimulus, stimulusSource, clockSource, RAIL, RAIL_CARD } from "./digital.js";
+import { gateLines, logicLines, logicOf, jkffLines, dffLines, decoder7447Lines, SEGMENT_DIGITS, timer555Lines, parseStimulus, stimulusSource, clockSource, RAIL, RAIL_CARD } from "./digital.js";
 
 export const GRID = 20;
 
@@ -172,6 +172,25 @@ const S = {
         "M0 40H12", "M12 40a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M0 60H12", "M12 60a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
         ...Array.from({ length: 16 }, (_, k) => `M80 ${150 - 20 * k}h4a4 4 0 1 0 8 0a4 4 0 1 0 -8 0M92 ${150 - 20 * k}H100`)],
   BUSENTRY: ["M0 0L-20 20"],
+  DFF: ["M20 -60H80V60H20Z", "M0 -40H20", "M0 0H12", "M12 0a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M20 -6L28 0L20 6",
+        "M0 40H20", "M80 -40H100", "M80 40H100", "M50 -60V-72", "M46 -76a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M50 -80V-88",
+        "M50 60V72", "M46 76a4 4 0 1 0 8 0a4 4 0 1 0 -8 0", "M50 80V88"],
+  SIPO: ["M20 -100H100V100H20Z", "M0 -80H20", "M0 -60H20", "M0 -20H12", "M12 -20a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+         "M20 -26L28 -20L20 -14", "M0 20H12", "M12 20a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+         ...Array.from({ length: 8 }, (_, k) => `M100 ${-70 + 20 * k}H120`)],
+  DEC7447: ["M20 -80H100V80H20Z", "M0 -60H20", "M0 -40H20", "M0 -20H20", "M0 0H20", "M0 60H12",
+            "M12 60a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
+            ...Array.from({ length: 7 }, (_, k) => `M100 ${-60 + 20 * k}h4a4 4 0 1 0 8 0a4 4 0 1 0 -8 0M112 ${-60 + 20 * k}H120`)],
+  // Seven segments drawn as their own paths, so each can be lit on its own.
+  // Segment order a, b, c, d, e, f, g, each its own path so it can be lit.
+  SEG7: ["M20 -80H100V90H20Z",
+         "M38 -62H74", "M78 -58V-6", "M78 6V58", "M38 62H74", "M34 6V58", "M34 -58V-6", "M38 0H74",
+         ...Array.from({ length: 7 }, (_, k) => `M0 ${-60 + 20 * k}H20`), "M60 90V110"],
+  POT: ["M0 0H16", "M16 -10H64V10H16Z", "M64 0H80", "M40 -40V-18", "M34 -24L40 -16L46 -24Z"],
+  ACSRC: ["M0 0H19", "M41 0H60", "M19 0a11 11 0 1 0 22 0a11 11 0 1 0 -22 0",
+          "M24 2q4 -8 6 0t6 0", "M16 -12H22", "M19 -15V-9"],
+  LED: ["M0 0H22", "M22 -10V10", "M22 -10L38 0L22 10Z", "M38 -10V10", "M38 0H60",
+        "M30 -14L38 -24", "M34 -22L38 -24L37 -20", "M38 -14L46 -24", "M42 -22L46 -24L45 -20"],
   TIMER555: ["M20 -60H100V60H20Z", "M0 -40H20", "M0 0H20", "M0 40H20",
              "M100 -40H120", "M100 20H120", "M40 -80V-60", "M80 -80V-60", "M60 60V80"],
   // Dependent sources: control terminals on the left, the source in the
@@ -203,7 +222,7 @@ const S = {
 };
 
 /** Shapes whose closed subpaths should be filled rather than stroked. */
-const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5], XFORM: [8, 9], NJF: [4], DEP_I: [8] };
+const FILLED = { NPN: [4], PNP: [4], D: [2], I: [3], NMOS: [9], PMOS: [9], AM: [5], XFORM: [8, 9], NJF: [4], DEP_I: [8], LED: [3], POT: [4] };
 
 /* ------------------------------------------------------------------- parts */
 
@@ -755,6 +774,175 @@ export const PARTS = {
     models: () => []
   },
 
+
+  /** 7474 D flip-flop: output follows D on the rising clock edge. */
+  DFF: {
+    key: "DFF", name: "D flip-flop", prefix: "U", shape: S.DFF,
+    pins: [[0, -40], [0, 0], [0, 40], [50, -88], [50, 88], [100, -40], [100, 40]],
+    pinNames: ["D", "CLK", "—", "PRE", "CLR", "Q", "Q̄"],
+    box: [-4, -92, 104, 92],
+    digital: true, optionalPins: [2, 5, 6],
+    fields: [{ k: "device", label: "Device", def: "7474", options: ["7474"], labels: { 7474: "7474 D" },
+               hint: "Q takes the value of D when CLK rises. PRE and CLR are active low" }],
+    texts: () => [
+      { x: 26, y: -40, text: "D", cls: "pin-name" }, { x: 30, y: 0, text: "CLK", cls: "pin-name" },
+      { x: 74, y: -40, text: "Q", cls: "pin-name", anchor: "end" }, { x: 74, y: 40, text: "Q̄", cls: "pin-name", anchor: "end" },
+      { x: 50, y: -50, text: "PRE", cls: "pin-name", anchor: "middle" },
+      { x: 50, y: 50, text: "CLR", cls: "pin-name", anchor: "middle" }
+    ],
+    emit: (c, n, ctx) => dffLines(`F${c.label}`,
+      { d: n[0], clk: n[1], pre: n[3], clr: n[4], q: n[5], qb: n[6] }, ctx?.analysis?.ffInit ?? "X"),
+    summary: () => "7474",
+    netlistName: (c) => `BF${c.label}_cn`,
+    models: () => ["DIGRAIL"]
+  },
+
+  /**
+   * 74164 shift register: eight D flip-flops in a chain. The two serial
+   * inputs are ANDed, so tie B high to use A alone.
+   */
+  SIPO: {
+    key: "SIPO", name: "74164 shift register", prefix: "U", shape: S.SIPO,
+    pins: [[0, -80], [0, -60], [0, -20], [0, 20], ...Array.from({ length: 8 }, (_, k) => [120, -70 + 20 * k])],
+    pinNames: ["A", "B", "CLK", "CLR", "QA", "QB", "QC", "QD", "QE", "QF", "QG", "QH"],
+    box: [-4, -104, 124, 104],
+    digital: true, optionalPins: Array.from({ length: 8 }, (_, k) => 4 + k),
+    fields: [{ k: "device", label: "Device", def: "74164", options: ["74164"], labels: { 74164: "74164 SIPO" },
+               hint: "Serial in, parallel out. Each rising clock edge shifts A·B into QA and every output along one" }],
+    texts: () => [
+      { x: 26, y: -80, text: "A", cls: "pin-name" }, { x: 26, y: -60, text: "B", cls: "pin-name" },
+      { x: 30, y: -20, text: "CLK", cls: "pin-name" }, { x: 26, y: 20, text: "CLR", cls: "pin-name" },
+      ...Array.from({ length: 8 }, (_, k) => ({ x: 94, y: -70 + 20 * k, text: `Q${"ABCDEFGH"[k]}`, cls: "pin-name", anchor: "end" }))
+    ],
+    emit: (c, n, ctx) => {
+      const init = ctx?.analysis?.ffInit ?? "X";
+      const name = `S${c.label}`;
+      const serial = `${name}_in`;
+      return [
+        ...gateLines(`${name}_and`, "and", [n[0], n[1]], serial),
+        ...Array.from({ length: 8 }, (_, k) => dffLines(`${name}_${k}`, {
+          d: k === 0 ? serial : n[4 + k - 1], clk: n[2], pre: null, clr: n[3], q: n[4 + k], qb: `${name}_${k}_qb`
+        }, init)).flat()
+      ];
+    },
+    summary: () => "74164",
+    netlistName: (c) => `BS${c.label}_and`,
+    models: () => ["DIGRAIL"]
+  },
+
+  /** 7447 BCD to seven-segment decoder, with active-low outputs. */
+  DEC7447: {
+    key: "DEC7447", name: "7447 seven-segment decoder", prefix: "U", shape: S.DEC7447,
+    pins: [[0, -60], [0, -40], [0, -20], [0, 0], [0, 60], ...Array.from({ length: 7 }, (_, k) => [120, -60 + 20 * k])],
+    pinNames: ["A", "B", "C", "D", "BI", "a", "b", "c", "d", "e", "f", "g"],
+    box: [-4, -84, 124, 84],
+    digital: true, optionalPins: Array.from({ length: 7 }, (_, k) => 5 + k),
+    fields: [{ k: "device", label: "Device", def: "7447", options: ["7447"], labels: { 7447: "7447 BCD→7-seg" },
+               hint: "A is the least significant bit. Outputs are active low, for a common-anode display. BI̅ low blanks it" }],
+    texts: () => [
+      ...["A", "B", "C", "D"].map((t, i) => ({ x: 26, y: -60 + 20 * i, text: t, cls: "pin-name" })),
+      { x: 26, y: 60, text: "BI", cls: "pin-name" },
+      ...Object.keys(SEGMENT_DIGITS).map((seg, k) => ({ x: 94, y: -60 + 20 * k, text: seg, cls: "pin-name", anchor: "end" }))
+    ],
+    emit: (c, n) => decoder7447Lines(`G${c.label}`, [n[0], n[1], n[2], n[3]], n.slice(5, 12), n[4]),
+    summary: () => "7447",
+    netlistName: (c) => `BG${c.label}_a`,
+    models: () => ["DIGRAIL"]
+  },
+
+  /**
+   * Seven-segment display. Each segment is an LED between its pin and the
+   * common pin, and each lights on the sheet once a run says current is
+   * flowing through it.
+   */
+  SEG7: {
+    key: "SEG7", name: "Seven-segment display", prefix: "DS", shape: S.SEG7,
+    pins: [...Array.from({ length: 7 }, (_, k) => [0, -60 + 20 * k]), [60, 110]],
+    pinNames: [...Object.keys(SEGMENT_DIGITS), "common"],
+    box: [-4, -84, 104, 114],
+    // Path indices of the segments in the symbol, in order a…g.
+    segmentPaths: [1, 2, 3, 4, 5, 6, 7],
+    texts: () => Object.keys(SEGMENT_DIGITS).map((seg, k) => ({ x: 26, y: -60 + 20 * k, text: seg, cls: "pin-name" })),
+    fields: [
+      { k: "common", label: "Common", def: "anode", options: ["anode", "cathode"],
+        labels: { anode: "Common anode (segments driven low)", cathode: "Common cathode (segments driven high)" },
+        hint: "A 7447 drives a common-anode display" },
+      { k: "rseries", label: "Segment resistance", def: "330", hint: "The resistor in series with each segment, in ohms" }
+    ],
+    emit: (c, n) => {
+      const common = n[7];
+      return n.slice(0, 7).flatMap((seg, k) => {
+        const anode = c.common === "cathode" ? seg : common;
+        const cathode = c.common === "cathode" ? common : seg;
+        return [
+          `R${c.label}_${k} ${anode} ${c.label}_m${k} ${c.rseries}`,
+          `D${c.label}_${k} ${c.label}_m${k} ${cathode} DLED`
+        ];
+      });
+    },
+    summary: (c) => (c.common === "cathode" ? "common cathode" : "common anode"),
+    netlistName: (c) => `D${c.label}_0`,
+    models: () => ["DLED"]
+  },
+
+  /** Potentiometer: one resistance split by a wiper. */
+  POT: {
+    key: "POT", name: "Potentiometer", prefix: "R", shape: S.POT,
+    pins: [[0, 0], [40, -40], [80, 0]],
+    pinNames: ["end 1", "wiper", "end 2"],
+    box: [-4, -44, 84, 14],
+    fields: [
+      { k: "value", label: "Resistance", def: "10k", hint: "End to end" },
+      { k: "wiper", label: "Wiper position", def: "0.5",
+        hint: "0 puts the wiper at end 1, 1 at end 2. The two halves always add up to the full resistance" }
+    ],
+    emit: (c, n) => {
+      const total = parseValue(c.value);
+      const frac = Math.min(0.999, Math.max(0.001, parseValue(c.wiper)));
+      const lower = isFinite(total) ? total * frac : NaN;
+      const upper = isFinite(total) ? total * (1 - frac) : NaN;
+      return [
+        `R${c.label}_a ${n[0]} ${n[1]} ${isFinite(lower) ? lower.toPrecision(6) : c.value}`,
+        `R${c.label}_b ${n[1]} ${n[2]} ${isFinite(upper) ? upper.toPrecision(6) : c.value}`
+      ];
+    },
+    summary: (c) => `${c.value}  wiper ${c.wiper}`,
+    netlistName: (c) => `R${c.label}_a`,
+    models: () => []
+  },
+
+  /** PSpice's VAC and VSIN in one part: a sine source with an AC magnitude. */
+  ACSRC: withSourceName({
+    key: "ACSRC", name: "AC source", prefix: "V", shape: S.ACSRC,
+    pins: [[0, 0], [60, 0]], pinNames: ["+", "-"],
+    box: [-4, -16, 64, 16],
+    fields: [
+      { k: "ac", label: "AC magnitude", def: "1", hint: "What an AC sweep uses. PSpice's VAC" },
+      { k: "dc", label: "DC offset", def: "0", hint: "The level the sine sits on" },
+      { k: "ampl", label: "Amplitude", def: "", hint: "Peak volts for a transient run. Leave blank for AC sweeps only" },
+      { k: "freq", label: "Frequency", def: "1k", hint: "Hertz, for a transient run" }
+    ],
+    emit: (c, n) => {
+      const sine = String(c.ampl ?? "").trim()
+        ? ` SIN(${c.dc || 0} ${c.ampl} ${c.freq || "1k"})` : "";
+      return [`${sourceName(c)} ${n[0]} ${n[1]} DC ${c.dc || 0} AC ${c.ac || 0}${sine}`];
+    },
+    summary: (c) => `${c.ac || 0}Vac${String(c.ampl ?? "").trim() ? `  ${c.ampl}V ${c.freq}` : ""}`,
+    models: () => []
+  }),
+
+  /** LED: a diode drawn as one, which lights on the sheet when it conducts. */
+  LED: {
+    key: "LED", name: "LED", prefix: "D", shape: S.LED,
+    pins: [[0, 0], [60, 0]], pinNames: ["anode", "cathode"],
+    box: [-4, -26, 64, 14],
+    lights: true,
+    fields: [{ k: "model", label: "Model", def: "DLED", options: ["DLED"], hint: "A red LED, forward drop about 1.8 V" }],
+    emit: (c, n) => [`${c.label} ${n[0]} ${n[1]} ${c.model}`],
+    summary: () => "LED",
+    models: (c) => [c.model]
+  },
+
   /** STIM1: a digital input described by time/value commands. */
   STIM: withSourceName({
     key: "STIM", name: "Digital stimulus", prefix: "DSTM", shape: S.DSRC,
@@ -868,14 +1056,14 @@ export const PARTS = {
 
 /** The palette's two tabs. Ground and net aliases belong to both. */
 export const PALETTE_TABS = {
-  analog: ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "DEP", "GND", "NET", "PWR",
+  analog: ["R", "POT", "C", "L", "V", "ACSRC", "VPULSE", "I", "D", "LED", "SW", "AM", "XFORM", "DEP", "GND", "NET", "PWR",
     "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "TIMER555", "PARAM"],
-  digital: ["GATE2", "GATE3", "INV", "JKFF", "MUX151", "DEC154", "TIMER555", "STIM", "DCLK", "DHI", "BUSENTRY", "PORT", "NET", "GND"]
+  digital: ["GATE2", "GATE3", "INV", "JKFF", "DFF", "SIPO", "MUX151", "DEC154", "DEC7447", "SEG7", "TIMER555", "STIM", "DCLK", "DHI", "BUSENTRY", "PORT", "NET", "GND"]
 };
 
 /** Order the palette is presented in. */
-export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "DEP", "GND", "NET", "PWR", "PORT", "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "TIMER555", "PARAM",
-  "GATE2", "GATE3", "INV", "JKFF", "MUX151", "DEC154", "STIM", "DCLK", "DHI", "BUSENTRY"];
+export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "DEP", "POT", "ACSRC", "LED", "GND", "NET", "PWR", "PORT", "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "TIMER555", "PARAM",
+  "GATE2", "GATE3", "INV", "JKFF", "DFF", "SIPO", "MUX151", "DEC154", "DEC7447", "SEG7", "STIM", "DCLK", "DHI", "BUSENTRY"];
 
 
 /**
@@ -900,6 +1088,10 @@ export const PART_ICONS = {
   DCLK: { box: [0, 0, 56, 44], paths: ["M4 10H38L48 22L38 34H4Z", "M9 29V19H15V29H21V19H27V29H33V19H36"] },
   DHI: { box: [0, 0, 56, 44], paths: ["M4 10H38L48 22L38 34H4Z", "M16 16V28", "M26 16V28M22 19L26 16"] },
   NET: { box: [0, 0, 56, 44], paths: ["M2 34H54", "M18 34V16", "M18 16H46V27H18"] },
+  DFF: { box: [0, 0, 56, 44], paths: ["M14 6H42V38H14Z", "M2 14H14", "M2 30H14", "M42 14H54", "M14 26L21 30L14 34"] },
+  SIPO: { box: [0, 0, 56, 44], paths: ["M12 4H38V40H12Z", "M2 12H12", "M2 30H12", "M38 10H52", "M38 18H52", "M38 26H52", "M38 34H52"] },
+  DEC7447: { box: [0, 0, 56, 44], paths: ["M12 6H38V38H12Z", "M2 14H12", "M2 30H12", "M38 12H52", "M38 22H52", "M38 32H52"] },
+  SEG7: { box: [0, 0, 56, 44], paths: ["M14 4H44V40H14Z", "M22 10H36", "M38 13V20", "M38 24V31", "M22 34H36", "M20 24V31", "M20 13V20", "M22 22H36"] },
   TIMER555: { box: [0, 0, 56, 44], paths: ["M12 8H44V36H12Z", "M2 14H12", "M2 30H12", "M44 22H54", "M28 4V8", "M28 36V40"] },
   PARAM: {
     box: [0, 0, 56, 44],

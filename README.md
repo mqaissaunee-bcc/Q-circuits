@@ -238,6 +238,7 @@ src/
                     the check runner
   diagram.js        the floating, read-only Reference diagram window
   submission.js     one attempt as a single PNG to hand in
+  authoring.js      the sheet as lab-diagram source, for writing new labs
   digital.js        gates, the 7473, 74151A, 74154, the 555, STIM1 and
                     DigClock from behavioural sources
   main.js           wiring: panels redraw from one refresh()
@@ -510,6 +511,60 @@ sources (`src/digital.js`), as TTL looks from outside: 0 V is 0, 5 V is 1.
 - The palette has **Analog** and **Digital** tabs; opening a Lab 10 or 11
   exercise switches to Digital. Keyboard shortcuts reach every part either
   way.
+
+### Printing
+
+**Print**, above the sheet, gives two pages: the schematic with its title
+block, then the plot with the measurements. Toolbars, panels, the netlist,
+the hint bar and the dot grid are working tools and stay off paper. The sheet
+is framed to the whole circuit while printing, whatever the student had
+zoomed in on, and the view is put back afterwards.
+
+### Copying a sheet as a lab diagram
+
+**Copy as lab diagram**, in the Netlist panel, writes the sheet out as the
+data a reference diagram is made of: parts, wires and probes, as JavaScript
+ready to paste into `DIAGRAMS` in `src/labs.js`. Identifiers are dropped,
+since they are handed out afresh on loading, and the title, analysis and plot
+settings are noted in comments above it, because those belong to the lab
+definition rather than to the diagram.
+
+Draw the circuit, copy it, paste it. `test/labs101.mjs` checks the round trip:
+a sheet copied out and loaded back is the same circuit.
+
+### Plot cursors
+
+Click the plot to place cursor A, shift-click for B. The readout under it
+gives each visible trace at A, at B and the difference, with the gap along
+the x axis in the heading — which is how the −3 dB points and rise times in
+the labs get measured. Arrow keys nudge the cursor last placed, shift-arrow
+by ten samples, Escape clears them. A new run clears them too, rather than
+leaving them pointing at samples that no longer exist.
+
+### Seven-segment display, shift register and friends
+
+- **7447** decodes BCD to seven active-low segment drivers, for a
+  common-anode display. Its outputs drive through 20 Ω rather than a gate's
+  1 kΩ, because a display's current would otherwise drag them to mid-rail.
+- **Seven-segment display** is an LED and a resistor per segment. Segments
+  **light on the sheet** once a run says current is flowing, as does an
+  **LED** part. Nothing lights until the run matches the drawing.
+- **7474** D flip-flop and **74164** shift register, both built from the same
+  behavioural gates. A part with no preset or clear pin passes null, which is
+  not the same as a pin wired to ground: that asserts it, as a real one does.
+- **Potentiometer** splits its resistance at the wiper (0 to 1) into two
+  resistors that always add up to the whole.
+- **AC source** is PSpice's VAC and VSIN in one: an AC magnitude for sweeps,
+  and an amplitude and frequency for transient runs, drawn as a sine in a
+  circle.
+
+### Half-built sheets are refused
+
+A pin with nothing on it has no path for current, and ngspice does not fail
+on that: it iterates until something gives up, which freezes the page. A run
+that finds a node with a single pin on it stops before starting and names the
+pin. Ports, power symbols, net aliases and bus entries all count as
+connections; a bus label does not, since a bus carries no current.
 
 ### 555 timer and dependent sources
 

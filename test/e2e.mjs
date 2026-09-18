@@ -1051,7 +1051,10 @@ const errText = await page.evaluate(async () => {
   s.edit(() => {
     const r = s.addComp("R", 100, 100, "R");
     r.value = "not-a-resistance";
+    // Both ends grounded: the value is then the only thing wrong, which is
+    // what this test is about. A dangling pin is refused before the engine runs.
     s.addComp("GND", 100, 100, "GND");
+    s.addComp("GND", 160, 100, "GND");
   }, "test");
   await window.__spiceLab.run();
   const box = document.querySelector("#runError .engine-error");
