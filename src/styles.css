@@ -635,3 +635,13 @@ dl.shortcuts kbd {
   #partTools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
   #partTools button { flex: 0 0 auto; }
 }
+
+/* title block */
+.tb-frame { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.tb-rule { fill: none; stroke: var(--ink); stroke-width: 1; }
+.tb-org { font-family: var(--sans, inherit); font-size: 17px; font-weight: 700; fill: var(--ink); }
+.tb-title { font-family: var(--mono); font-size: 14px; fill: var(--ink-soft); }
+.tb-label { font-family: var(--sans, inherit); font-size: 9px; letter-spacing: .08em; fill: var(--ink-soft); }
+.tb-value { font-family: var(--mono); font-size: 14px; fill: var(--ink); }
+#btnTitleBlock[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.titleblock-box { border-top: 1px solid var(--rule); margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3) 0; }

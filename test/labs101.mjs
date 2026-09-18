@@ -1030,6 +1030,106 @@ if (process.env.SHOTS) {
 
 /* ------------------------------------------------------------- the UI */
 
+console.log("\n— title block and submission —");
+await loadSolved("e101-07a");
+const tbOff = await page.evaluate(() => document.querySelectorAll(".title-block").length);
+check("no title block until it is asked for", tbOff === 0);
+await page.evaluate(() => { document.getElementById("titleBlockBox").open = true; });
+await page.fill("#tbName", "Sam Rivera");
+await page.fill("#tbCourse", "ELEC 101");
+await page.fill("#tbOrg", "Community College");
+await page.fill("#tbDate", "2026-09-18");
+await page.click("#btnTitleBlock");
+await page.waitForTimeout(150);
+const tb = await page.evaluate(() => {
+  const g = document.querySelector(".title-block");
+  const texts = [...(g?.querySelectorAll("text") || [])].map((t) => t.textContent);
+  const box = g?.getBoundingClientRect();
+  const sheet = document.querySelector("#sheetHost svg").getBoundingClientRect();
+  return { texts, inside: box && box.top >= sheet.top - 1 && box.bottom <= sheet.bottom + 1, state: window.__spiceLab.store.state.titleBlock };
+});
+check("the title block shows the student, course, organization and document",
+  tb.texts.includes("Sam Rivera") && tb.texts.includes("ELEC 101") && tb.texts.includes("Community College") && tb.texts.includes("LAB 07A"),
+  tb.texts.join(" | "));
+check("it is drawn on the sheet, so an export carries it", tb.inside);
+check("its details are saved with the circuit", tb.state.show === true && tb.state.name === "Sam Rivera");
+const tbFit = await page.evaluate(() => {
+  const before = JSON.stringify(window.__spiceLab.canvas.contentBox());
+  window.__spiceLab.canvas.render();
+  return before === JSON.stringify(window.__spiceLab.canvas.contentBox());
+});
+check("the block sits still instead of walking down the page on every render", tbFit);
+const tbCarried = await page.evaluate(() => {
+  const sel = document.getElementById("labSelect");
+  sel.value = "e101-06a"; sel.dispatchEvent(new Event("change"));
+  return window.__spiceLab.store.state.titleBlock;
+});
+check("the student's own details follow them into the next lab", tbCarried.name === "Sam Rivera" && tbCarried.course === "ELEC 101", JSON.stringify(tbCarried));
+
+// A real submission sheet, built from a real marking run.
+await loadSolved("e101-07a");
+await page.evaluate(() => { document.getElementById("tbName").value = "Sam Rivera"; document.getElementById("tbName").dispatchEvent(new Event("input")); });
+const sub = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  const out = await L.labs.runChecks(L.labs.labById("e101-07a"), L.store);
+  const blob = await L.buildSubmissionSheet({
+    svg: L.canvas.svg, sheetBox: L.canvas.contentBox(),
+    plotCanvas: document.querySelector(".scope-canvas"),
+    lab: L.labs.labById("e101-07a"), state: L.store.state, outcome: out
+  });
+  const bmp = await createImageBitmap(blob);
+  return { type: blob.type, size: blob.size, w: bmp.width, h: bmp.height, ok: out.ok };
+});
+check("a submission sheet is produced as a PNG", sub.type === "image/png" && sub.size > 20000, JSON.stringify(sub));
+check("it is a full page, tall enough for schematic, plot and results", sub.w === 3200 && sub.h > 2000, `${sub.w}×${sub.h}`);
+const codes = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  const out = await L.labs.runChecks(L.labs.labById("e101-07a"), L.store);
+  const make = async (name) => {
+    const state = { ...L.store.state, titleBlock: { ...L.store.state.titleBlock, name } };
+    const blob = await L.buildSubmissionSheet({ svg: L.canvas.svg, sheetBox: L.canvas.contentBox(), plotCanvas: null, lab: L.labs.labById("e101-07a"), state, outcome: out });
+    return blob.size;
+  };
+  return { a: await make("Sam Rivera"), b: await make("Alex Chen") };
+});
+check("two students' sheets differ", codes.a !== codes.b, JSON.stringify(codes));
+const guard = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  L.store.edit((s) => { s.titleBlock.name = ""; }, "t");
+  document.getElementById("btnSubmit").click();
+  return { open: document.getElementById("titleBlockBox").open, focus: document.activeElement.id };
+});
+check("submitting without a name asks for one instead of saving an unsigned sheet", guard.open && guard.focus === "tbName", JSON.stringify(guard));
+if (process.env.SHOTS) {
+  await page.evaluate(async () => {
+    const L = window.__spiceLab;
+    L.store.edit((s) => { s.titleBlock.name = "Sam Rivera"; }, "t");
+    await L.run();
+    const out = await L.labs.runChecks(L.labs.labById("e101-07a"), L.store);
+    const blob = await L.buildSubmissionSheet({
+      svg: L.canvas.svg, sheetBox: L.canvas.contentBox(),
+      plotCanvas: document.querySelector(".scope-canvas"),
+      lab: L.labs.labById("e101-07a"), state: L.store.state, outcome: out
+    });
+    const img = document.createElement("img");
+    img.id = "shot";
+    img.src = URL.createObjectURL(blob);
+    img.style.cssText = "position:fixed;inset:0;width:100vw;z-index:999;background:#fff";
+    document.body.appendChild(img);
+    await img.decode();
+  });
+  await page.locator("#shot").screenshot({ path: "/tmp/submission.png" });
+  await page.evaluate(() => document.getElementById("shot").remove());
+  await page.evaluate(() => { window.T.open("e101-12a"); });
+  await page.evaluate(() => {
+    const L = window.__spiceLab;
+    L.store.loadCircuit({ ...L.labs.diagramFor(L.labs.labById("e101-12a")), title: "LAB 12A" });
+    L.store.edit((s) => { s.titleBlock = { show: true, org: "Community College", course: "ELEC 101", name: "Sam Rivera", date: "2026-09-18" }; }, "t");
+    L.canvas.fit();
+  });
+  await page.locator("#sheetHost").screenshot({ path: "/tmp/titleblock.png" });
+}
+
 console.log("\n— palette icons —");
 const icons = await page.evaluate(() => {
   const out = { empty: [], noLabel: [], exposed: [], count: 0, tiny: [] };

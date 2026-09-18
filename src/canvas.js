@@ -236,6 +236,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     drawComps();
     if (!readOnly) drawNodeTags();
     drawNotes();
+    drawTitleBlock();
     drawBias();
     drawProbes();
     drawSelection();
@@ -509,6 +510,57 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
       const t = el("text", { x: x + 9, y: y - 12, class: "bias-text" }, g);
       t.textContent = text;
     });
+  }
+
+  /**
+   * The drawing's title block, in the corner below the circuit. It is part of
+   * the sheet, so an exported PNG carries it without any extra work.
+   *
+   * Its position follows the circuit's own bounds, measured from the parts
+   * rather than from what is drawn — measuring what is drawn would include
+   * the block and walk it down the page on every render.
+   */
+  function drawTitleBlock() {
+    const tb = store.state.titleBlock;
+    if (!tb?.show) return;
+    const b = partsBounds();
+    const W = 560, H = 120, COL = 300;
+    const x = Math.round((b.x1 - W) / GRID) * GRID;
+    const y = Math.round((b.y1 + 60) / GRID) * GRID;
+    const g = el("g", { class: "title-block", "aria-hidden": "true" }, svg);
+    el("rect", { x, y, width: W, height: H, class: "tb-frame" }, g);
+    el("path", { d: `M${x} ${y + 44}H${x + W}M${x + COL} ${y + 44}V${y + H}M${x} ${y + 82}H${x + W}`, class: "tb-rule" }, g);
+
+    const put = (tx, ty, text, cls) => {
+      const t = el("text", { x: tx, y: ty, class: cls }, g);
+      t.textContent = text;
+      return t;
+    };
+    const field = (col, row, label, value) => {
+      const fx = x + 12 + col * COL, fy = y + 60 + row * 38;
+      put(fx, fy, label.toUpperCase(), "tb-label");
+      put(fx, fy + 18, value || "—", "tb-value");
+    };
+    put(x + 12, y + 20, tb.org || "—", "tb-org");
+    put(x + W - 12, y + 20, store.state.title || "Untitled circuit", "tb-title").setAttribute("text-anchor", "end");
+    field(0, 0, "Name", tb.name);
+    field(1, 0, "Course", tb.course);
+    field(0, 1, "Date", tb.date);
+    field(1, 1, "Document", store.state.title || "Untitled circuit");
+  }
+
+  /** Bounds of the circuit itself: parts, wires and notes, not the title block. */
+  function partsBounds() {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const add = (ax, ay, bx, by) => {
+      x0 = Math.min(x0, ax); y0 = Math.min(y0, ay);
+      x1 = Math.max(x1, bx); y1 = Math.max(y1, by);
+    };
+    store.state.comps.forEach((c) => { const b = boxOf(c); add(b.x0, b.y0, b.x1, b.y1); });
+    store.state.wires.forEach((w) => add(Math.min(w.x1, w.x2), Math.min(w.y1, w.y2), Math.max(w.x1, w.x2), Math.max(w.y1, w.y2)));
+    store.state.notes.forEach((n) => add(n.x, n.y - 16, n.x + 220, n.y + 8));
+    if (!isFinite(x0)) return { x0: 40, y0: 40, x1: 900, y1: 500 };
+    return { x0, y0, x1, y1 };
   }
 
   function signature() {

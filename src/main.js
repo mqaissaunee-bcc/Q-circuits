@@ -8,7 +8,7 @@
 
 import { PARTS, PALETTE, PALETTE_TABS, PART_ICONS, pinsOf, netlistNameOf, isDigital, shapeOf, filledIndices } from "./parts.js";
 import { buildNodes, nodesFor, validate, formatEng, paramValues, parseValue } from "./netlist.js";
-import { Store, DEFAULT_ANALYSIS, DEFAULT_PLOT } from "./store.js";
+import { Store, DEFAULT_ANALYSIS, DEFAULT_PLOT, DEFAULT_TITLE_BLOCK } from "./store.js";
 import { createCanvas } from "./canvas.js";
 import { createScope } from "./scope.js";
 import { runNetlist, engineReady } from "./engine.js";
@@ -18,6 +18,7 @@ import { explainEngineError } from "./errors.js";
 import { shareUrl, decodeCircuit, clearHash } from "./share.js";
 import { exportSvg, exportCanvas } from "./export-png.js";
 import { createDiagramWindow } from "./diagram.js";
+import { buildSubmissionSheet } from "./submission.js";
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -688,6 +689,54 @@ function showRunError(message, netlist) {
 
 $("btnRun").addEventListener("click", run);
 
+/* ---------------------------------------------------------- title block */
+
+const TB_INPUTS = { name: "tbName", course: "tbCourse", org: "tbOrg", date: "tbDate" };
+
+function titleBlockState() {
+  if (!store.state.titleBlock) store.state.titleBlock = { ...DEFAULT_TITLE_BLOCK };
+  return store.state.titleBlock;
+}
+
+/** The date used when the student has not typed one. */
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
+function syncTitleBlock() {
+  const tb = titleBlockState();
+  Object.entries(TB_INPUTS).forEach(([k, id]) => {
+    const el = $(id);
+    if (document.activeElement !== el) el.value = tb[k] ?? "";
+  });
+  const b = $("btnTitleBlock");
+  b.setAttribute("aria-pressed", tb.show ? "true" : "false");
+  b.textContent = tb.show ? "Hide title block" : "Title block";
+}
+
+Object.entries(TB_INPUTS).forEach(([k, id]) => {
+  $(id).addEventListener("input", () => {
+    titleBlockState()[k] = $(id).value;
+    store.save();
+    if (currentLab) store.saveLabWork(currentLab.id);
+    canvas.render();
+  });
+});
+
+$("btnTitleBlock").addEventListener("click", () => {
+  const tb = titleBlockState();
+  tb.show = !tb.show;
+  if (tb.show && !tb.date) { tb.date = todayISO(); $("tbDate").value = tb.date; }
+  store.save();
+  if (currentLab) store.saveLabWork(currentLab.id);
+  syncTitleBlock();
+  canvas.render();
+  if (tb.show && !tb.name) {
+    $("titleBlockBox").open = true;
+    say("Title block added. Fill in your name and course below the sheet.");
+  } else {
+    say(tb.show ? "Title block added to the sheet." : "Title block removed.");
+  }
+});
+
 /* ---------------------------------------------------------- axis ranges */
 
 const PLOT_INPUTS = { xMin: "plotXMin", xMax: "plotXMax", yMin: "plotYMin", yMax: "plotYMax", y2Min: "plotY2Min", y2Max: "plotY2Max" };
@@ -732,6 +781,7 @@ $("btnAxisAuto").addEventListener("click", () => {
   Object.keys(PLOT_INPUTS).forEach((k) => { p[k] = ""; });
   store.save();
   syncPlotInputs();
+  syncTitleBlock();
   say("Both axes are automatic again.");
 });
 
@@ -898,6 +948,7 @@ function clearLabPanel() {
   $("labProgress").hidden = true;
   $("labKind").hidden = true;
   $("btnCheck").disabled = true;
+  $("btnSubmit").hidden = true;
   $("btnLabReset").hidden = true;
 }
 
@@ -927,6 +978,8 @@ function renderLabPanel(lab) {
   });
   renderQuestions(lab);
   $("btnCheck").disabled = false;
+  $("btnSubmit").disabled = false;
+  $("btnSubmit").hidden = false;
   $("btnLabReset").hidden = false;
 }
 
@@ -952,11 +1005,16 @@ function renderQuestions(lab) {
   });
 }
 
-$("btnCheck").addEventListener("click", async () => {
-  if (!currentLab || running) return;
+/**
+ * Mark the current lab: run its checks, show them, record a pass. Returns the
+ * outcome so the submission sheet can be built from the same run rather than
+ * a second one that might disagree.
+ */
+async function markLab() {
+  if (!currentLab || running) return null;
   running = true;
-  const btn = $("btnCheck");
-  btn.disabled = true;
+  $("btnCheck").disabled = true;
+  $("btnSubmit").disabled = true;
   const host = $("checkResults");
   host.replaceChildren();
   $("runError").replaceChildren();
@@ -968,7 +1026,8 @@ $("btnCheck").addEventListener("click", async () => {
   const outcome = await runChecks(currentLab, store, (m) => { note.textContent = m; say(m); });
 
   running = false;
-  btn.disabled = false;
+  $("btnCheck").disabled = false;
+  $("btnSubmit").disabled = false;
 
   if (outcome.error) showRunError(outcome.error, $("netOut").value);
   if (outcome.result) {
@@ -1006,6 +1065,52 @@ $("btnCheck").addEventListener("click", async () => {
     say(`All ${outcome.results.length} checks passed. ${currentLab.title} is complete.`);
   } else {
     say(`${passed} of ${outcome.results.length} checks passed.${outcome.error ? " The simulation did not run; see the explanation under Run simulation." : ""}`);
+  }
+  return outcome;
+}
+
+$("btnCheck").addEventListener("click", () => markLab());
+
+/**
+ * Check the work, then hand back one image holding the whole attempt: the
+ * schematic, the plot, the readings and every check. What gets submitted is
+ * the run that was just marked, not a fresh one.
+ */
+$("btnSubmit").addEventListener("click", async () => {
+  if (!currentLab || running) return;
+  const tb = titleBlockState();
+  if (!tb.name) {
+    $("titleBlockBox").open = true;
+    $("titleBlockBox").scrollIntoView({ block: "nearest" });
+    $("tbName").focus();
+    say("Add your name under the sheet first: the submission sheet is signed with it.");
+    return;
+  }
+  const outcome = await markLab();
+  if (!outcome) return;
+  try {
+    const blob = await buildSubmissionSheet({
+      svg: canvas.svg,
+      sheetBox: canvas.contentBox(),
+      plotCanvas: document.querySelector(".scope-canvas"),
+      lab: currentLab,
+      state: store.state,
+      outcome
+    });
+    const name = `${slug(tb.name)}-${slug(currentLab.code || currentLab.id)}-submission.png`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    say(outcome.ok
+      ? `Submission sheet saved as ${name}. It records all ${outcome.results.length} checks passing.`
+      : `Submission sheet saved as ${name}. It records ${outcome.results.filter((r) => r.pass).length} of ${outcome.results.length} checks passing.`);
+  } catch (e) {
+    say(`The submission sheet could not be made: ${e.message}`);
   }
 });
 
@@ -1289,4 +1394,4 @@ window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, 
     try { localStorage.removeItem("q-circuits-labwork-v1"); } catch { /* storage blocked */ }
   },
   currentLab: () => currentLab,
-  simulate, diagram, labs: { LABS, runChecks, labById, corners, diagramFor } };
+  simulate, diagram, buildSubmissionSheet, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor } };

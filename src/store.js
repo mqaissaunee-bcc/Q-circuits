@@ -36,6 +36,12 @@ export const DEFAULT_ANALYSIS = {
  * top pane and y2 to the second, when volts and amps are stacked. `mode` is
  * the AC display: db, mag or phase.
  */
+/**
+ * The drawing's title block. Deliberately generic: any institution, any
+ * course. The document name comes from the circuit's own title.
+ */
+export const DEFAULT_TITLE_BLOCK = { show: false, org: "", course: "", name: "", date: "" };
+
 export const DEFAULT_PLOT = { xMin: "", xMax: "", yMin: "", yMax: "", y2Min: "", y2Max: "", mode: "" };
 
 export class Store {
@@ -56,6 +62,7 @@ export class Store {
       notes: [],           // free text on the sheet; never reaches the netlist
       answers: {},         // lab question id -> what the student typed
       plot: { ...DEFAULT_PLOT },
+      titleBlock: { ...DEFAULT_TITLE_BLOCK },
       showBias: false      // print operating-point voltages on the sheet
     };
     this.selection = new Set();   // ids of comps and wires
@@ -371,6 +378,7 @@ export class Store {
     this.edit((s) => {
       s.comps = []; s.wires = []; s.seq = {}; s.probes = []; s.notes = [];
       s.answers = {}; s.showBias = false; s.plot = { ...DEFAULT_PLOT };
+      s.titleBlock = { ...s.titleBlock, show: false };
       s.title = "Untitled circuit";
     }, "clear");
     this.selection.clear();
@@ -543,6 +551,7 @@ export class Store {
       this.state.answers = parsed.state.answers || {};
       this.state.showBias = !!parsed.state.showBias;
       this.state.plot = { ...DEFAULT_PLOT, ...(parsed.state.plot || {}) };
+      this.state.titleBlock = { ...DEFAULT_TITLE_BLOCK, ...(parsed.state.titleBlock || {}) };
       this.uid = parsed.uid || 1;
       this.markClean();
       return true;
@@ -573,6 +582,7 @@ export class Store {
       s.answers = doc.answers || {};
       s.showBias = !!doc.showBias;
       s.plot = { ...DEFAULT_PLOT, ...(doc.plot || {}) };
+      s.titleBlock = { ...DEFAULT_TITLE_BLOCK, ...(doc.titleBlock || {}) };
       s.analysis = { ...DEFAULT_ANALYSIS, ...(doc.analysis || {}) };
     }, "open");
     this.selection.clear();
@@ -594,6 +604,9 @@ export class Store {
       s.answers = {};
       s.showBias = false;
       s.plot = { ...DEFAULT_PLOT, ...(circuit.plot || {}) };
+      // A student's name and course are theirs, not the circuit's: they
+      // survive opening another lab.
+      s.titleBlock = { ...DEFAULT_TITLE_BLOCK, ...s.titleBlock, ...(circuit.titleBlock || {}) };
       s.analysis = { ...DEFAULT_ANALYSIS, ...(circuit.analysis || {}) };
     }, "load");
     this.selection.clear();

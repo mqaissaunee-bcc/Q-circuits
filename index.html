@@ -86,12 +86,26 @@
       <span class="head-actions">
         <button type="button" id="btnDiagram" class="ghost" aria-pressed="false" aria-controls="diagramWin" hidden
                 title="Show the lab's circuit in a window you can move beside the sheet">Reference diagram</button>
+        <button type="button" id="btnTitleBlock" class="ghost" aria-pressed="false"
+                title="Draw a title block in the corner of the sheet, which exports with it">Title block</button>
         <button type="button" id="btnBias" class="ghost" aria-pressed="false"
                 title="Print the operating-point voltage at every node, like PSpice's V button">Show DC voltages</button>
         <button type="button" id="btnPngSheet" class="ghost">Export PNG</button>
       </span>
     </h2>
     <div class="sheet-host" id="sheetHost"></div>
+    <details class="titleblock-box" id="titleBlockBox">
+      <summary>Title block details</summary>
+      <p class="field-hint">Used by the title block on the sheet and by the submission sheet. Your name and course stay with you when you open another lab; the document name is the circuit name at the top of the page.</p>
+      <div class="field-grid-2">
+        <div class="field"><label for="tbName">Your name</label><input type="text" id="tbName" autocomplete="name"></div>
+        <div class="field"><label for="tbCourse">Course</label><input type="text" id="tbCourse" autocomplete="off"></div>
+      </div>
+      <div class="field-grid-2">
+        <div class="field"><label for="tbOrg">Organization</label><input type="text" id="tbOrg" autocomplete="organization"></div>
+        <div class="field"><label for="tbDate">Date</label><input type="text" id="tbDate" autocomplete="off" placeholder="today"></div>
+      </div>
+    </details>
     <p class="hint-bar">
       <span>Pick a part, then click the sheet to place it.</span>
       <span>Drag on empty space to box-select.</span>
@@ -139,6 +153,8 @@
         <div class="lab-questions" id="labQuestions" hidden></div>
         <div class="btn-row">
           <button type="button" id="btnCheck" class="primary" disabled>Check my work</button>
+          <button type="button" id="btnSubmit" hidden
+                  title="Check the work and save one image to hand in: schematic, plot, readings and results">Save submission sheet</button>
           <button type="button" id="btnLabReset" class="ghost" hidden>Start over</button>
         </div>
         <div id="checkResults"></div>

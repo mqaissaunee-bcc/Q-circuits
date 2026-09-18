@@ -237,6 +237,7 @@ src/
   labs.js           lab definitions, reference diagrams, check builders and
                     the check runner
   diagram.js        the floating, read-only Reference diagram window
+  submission.js     one attempt as a single PNG to hand in
   digital.js        gates, the 7473, 74151A, 74154, STIM1 and DigClock from
                     behavioural sources
   main.js           wiring: panels redraw from one refresh()
@@ -509,6 +510,30 @@ sources (`src/digital.js`), as TTL looks from outside: 0 V is 0, 5 V is 1.
 - The palette has **Analog** and **Digital** tabs; opening a Lab 10 or 11
   exercise switches to Digital. Keyboard shortcuts reach every part either
   way.
+
+### Title block and submission sheet
+
+**Title block** above the sheet draws a frame in the corner of the drawing
+with the organization, the student's name, the course, the date and the
+document name (the circuit's own title). It is deliberately generic: fill in
+any institution. The details live under the sheet, in *Title block details*.
+
+The block is drawn as part of the sheet, so *Export PNG* carries it with no
+extra work. Its position follows the circuit's bounds measured from the
+parts, not from what is drawn — measuring the drawing would include the
+block and walk it down the page on every render. The student's name and
+course stay with them when they open another lab; the toggle does not.
+
+**Save submission sheet**, in the Lab panel, marks the work and then writes
+one PNG holding the whole attempt: a header with the student and exercise,
+the verdict, the schematic, the plot, every reading entered and every check
+with the reason it passed or failed. It is built from the run that was just
+marked, not a second one that might disagree, and it will not save without a
+name.
+
+Each sheet carries a short **check code** over the student, exercise, date
+and score. It is a checksum, not a signature: it catches a sheet edited after
+the fact and would not stop a determined forgery.
 
 ### Palette icons
 
