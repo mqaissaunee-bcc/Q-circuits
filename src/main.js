@@ -6,18 +6,16 @@
  * the validation messages from ever disagreeing with what is on the sheet.
  */
 
-import { PARTS, PALETTE, PALETTE_TABS, pinsOf, netlistNameOf, isDigital } from "./parts.js";
+import { PARTS, PALETTE, PALETTE_TABS, PART_ICONS, pinsOf, netlistNameOf, isDigital, shapeOf, filledIndices } from "./parts.js";
 import { buildNodes, nodesFor, validate, formatEng, paramValues, parseValue } from "./netlist.js";
 import { Store, DEFAULT_ANALYSIS, DEFAULT_PLOT } from "./store.js";
 import { createCanvas } from "./canvas.js";
 import { createScope } from "./scope.js";
 import { runNetlist, engineReady } from "./engine.js";
-import { LABS, LAB_KINDS, labById, runChecks, corners, diagramFor,
-  allLabs, groupsFor, registerImported, unregisterImported } from "./labs.js";
-import { parseLabFile, LABFILE_FORMAT } from "./labfile.js";
+import { LABS, LAB_GROUPS, LAB_KINDS, labById, runChecks, corners, diagramFor } from "./labs.js";
 import { simulate, probedTraces, previewNetlist } from "./simulate.js";
 import { explainEngineError } from "./errors.js";
-import { shareUrl, decodeCircuit, clearHash, labUrl, decodeLab } from "./share.js";
+import { shareUrl, decodeCircuit, clearHash } from "./share.js";
 import { exportSvg, exportCanvas } from "./export-png.js";
 import { createDiagramWindow } from "./diagram.js";
 
@@ -92,7 +90,7 @@ Object.keys(PALETTE_TABS).forEach((tab) => {
     b.dataset.tabPart = tab;
     b.setAttribute("aria-pressed", "false");
     b.title = def.name;
-    b.textContent = shortName(def);
+    b.append(partIcon(key), partLabel(def));
     partTools.appendChild(b);
   });
 });
@@ -110,6 +108,38 @@ tabRow.addEventListener("click", (evt) => {
 });
 setPaletteTab("analog");
 void PALETTE;
+
+/**
+ * A palette button draws the part's own symbol, taken from the same shape
+ * data the sheet draws, so the picture on the button is always the picture
+ * the student is about to place.
+ */
+function partIcon(key) {
+  const def = PARTS[key];
+  const sample = { type: key, x: 0, y: 0, rot: 0 };
+  def.fields.forEach((f) => { sample[f.k] = f.def; });
+  const custom = PART_ICONS[key];
+  const [x0, y0, x1, y1] = custom ? custom.box : def.boxFor ? def.boxFor(sample) : def.box;
+  const pad = custom ? 0 : 6;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `${x0 - pad} ${y0 - pad} ${x1 - x0 + pad * 2} ${y1 - y0 + pad * 2}`);
+  svg.setAttribute("class", "part-icon");
+  svg.setAttribute("aria-hidden", "true");
+  const fills = custom ? custom.fills || [] : filledIndices(key);
+  (custom ? custom.paths : shapeOf(sample)).forEach((d, i) => {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", d);
+    path.setAttribute("class", fills.includes(i) ? "part-path is-filled" : "part-path");
+    svg.appendChild(path);
+  });
+  return svg;
+}
+
+function partLabel(def) {
+  const span = document.createElement("span");
+  span.textContent = shortName(def);
+  return span;
+}
 
 function shortName(def) {
   const map = {
@@ -763,9 +793,8 @@ function renderLabList() {
   labSelect.appendChild(free);
 
   let passed = 0;
-  const all = allLabs();
-  groupsFor(all).forEach((g) => {
-    const labs = all.filter((l) => l.group === g.id);
+  LAB_GROUPS.forEach((g) => {
+    const labs = LABS.filter((l) => l.group === g.id);
     if (!labs.length) return;
     const og = document.createElement("optgroup");
     og.label = g.title;
@@ -782,7 +811,7 @@ function renderLabList() {
   labSelect.value = keep;
 
   const tally = $("labTally");
-  tally.textContent = passed ? `${passed} of ${all.length} passed` : "";
+  tally.textContent = passed ? `${passed} of ${LABS.length} passed` : "";
 }
 renderLabList();
 
@@ -815,9 +844,7 @@ function openLab(lab) {
 function setLab(lab) {
   currentLab = lab;
   store.currentLabId = lab ? lab.id : "";
-  // An imported lab need not carry a drawing; without one there is nothing
-  // for the reference window to show.
-  $("btnDiagram").hidden = !lab || !(diagramFor(lab)?.comps?.length);
+  $("btnDiagram").hidden = !lab;
   diagram.setLab(lab);
   if (lab) setPaletteTab(/^e101-1[01]/.test(lab.id) ? "digital" : "analog");
   $("checkResults").replaceChildren();
@@ -863,84 +890,6 @@ $("btnLabReset").addEventListener("click", () => {
   $("checkResults").replaceChildren();
 });
 
-/* ------------------------------------------------------- imported labs */
-
-/**
- * Lab files are data, never code: `parseLabFile` compiles the JSON into the
- * same checks a built-in lab uses, and refuses the file if anything in it is
- * unknown. A broken file is reported line by line rather than half-loaded.
- */
-function showImportMessages(kind, lines) {
-  const host = $("labImportMsg");
-  host.replaceChildren();
-  if (!lines.length) return;
-  const box = document.createElement("div");
-  box.className = `import-msg ${kind}`;
-  const ul = document.createElement("ul");
-  lines.forEach((t) => { const li = document.createElement("li"); li.textContent = t; ul.appendChild(li); });
-  box.appendChild(ul);
-  host.appendChild(box);
-}
-
-/** Compile, register and (optionally) store a lab document. */
-function acceptLab(doc, { store: keep = true } = {}) {
-  const { lab, errors, warnings } = parseLabFile(typeof doc === "string" ? doc : JSON.stringify(doc));
-  if (!lab) {
-    showImportMessages("bad", ["This lab file could not be opened:", ...errors]);
-    say(`That lab file has ${errors.length} problem${errors.length === 1 ? "" : "s"}; they are listed under the lab panel.`);
-    return null;
-  }
-  registerImported(lab);
-  if (keep && !store.saveImportedLab(lab.source)) {
-    warnings.push("This browser would not store the lab, so it will be gone when you close the tab.");
-  }
-  renderLabList();
-  showImportMessages("ok", [`Imported ${lab.title}.`, ...warnings]);
-  return lab;
-}
-
-/** Load the labs this browser has already imported. */
-function restoreImportedLabs() {
-  const stored = store.readImportedLabs();
-  const broken = [];
-  Object.values(stored).forEach((entry) => {
-    const { lab } = parseLabFile(JSON.stringify(entry.doc));
-    if (lab) registerImported(lab);
-    else broken.push(entry.doc?.title || entry.doc?.id || "an imported lab");
-  });
-  if (broken.length) showImportMessages("bad", [`These imported labs could no longer be read: ${broken.join(", ")}.`]);
-  renderLabList();
-}
-
-$("btnLabImport").addEventListener("click", () => $("labFile").click());
-
-$("labFile").addEventListener("change", async (evt) => {
-  const file = evt.target.files?.[0];
-  evt.target.value = "";
-  if (!file) return;
-  let text;
-  try { text = await file.text(); }
-  catch { showImportMessages("bad", ["That file could not be read."]); return; }
-  const lab = acceptLab(text);
-  if (!lab) return;
-  labSelect.value = lab.id;
-  labSelect.dispatchEvent(new Event("change"));
-});
-
-$("btnLabRemove").addEventListener("click", () => {
-  if (!currentLab || !currentLab.imported) return;
-  if (!confirm(`Remove ${currentLab.title}?\n\nThe lab and your work on it are deleted from this browser. The file itself is untouched.`)) return;
-  const id = currentLab.id;
-  store.removeImportedLab(id);
-  unregisterImported(id);
-  setLab(null);
-  labSelect.value = "";
-  store.clear();
-  renderLabList();
-  showImportMessages("ok", ["Removed."]);
-  say("Imported lab removed.");
-});
-
 function clearLabPanel() {
   $("labSummary").textContent = "";
   $("labTasks").replaceChildren();
@@ -950,7 +899,6 @@ function clearLabPanel() {
   $("labKind").hidden = true;
   $("btnCheck").disabled = true;
   $("btnLabReset").hidden = true;
-  $("btnLabRemove").hidden = true;
 }
 
 /** Fill the lab panel with a lab's brief, tasks and questions. */
@@ -970,14 +918,6 @@ function renderLabPanel(lab) {
   kind.dataset.kind = lab.kind;
 
   $("labSummary").textContent = lab.summary;
-  const lessonRow = $("labLesson");
-  lessonRow.replaceChildren();
-  if (lab.lesson && /^https?:\/\//i.test(lab.lesson)) {
-    const a = document.createElement("a");
-    a.href = lab.lesson; a.target = "_blank"; a.rel = "noopener noreferrer";
-    a.textContent = "Read the lesson for this lab (opens in a new tab)";
-    lessonRow.appendChild(a);
-  }
   const ol = $("labTasks");
   ol.replaceChildren();
   lab.tasks.forEach((t) => {
@@ -988,7 +928,6 @@ function renderLabPanel(lab) {
   renderQuestions(lab);
   $("btnCheck").disabled = false;
   $("btnLabReset").hidden = false;
-  $("btnLabRemove").hidden = !lab.imported;
 }
 
 function renderQuestions(lab) {
@@ -1292,19 +1231,6 @@ store.subscribe((_, reason) => {
 
 async function boot() {
   const restored = store.restore() && store.state.comps.length > 0;
-  restoreImportedLabs();
-
-  // A lab link brings the whole lab with it, so it is handled before circuits.
-  let linkedLab = null;
-  try {
-    const doc = await decodeLab();
-    if (doc) {
-      linkedLab = acceptLab(doc);
-      clearHash();
-    }
-  } catch (e) {
-    setTimeout(() => say(e.message), 0);
-  }
 
   let shared = null;
   try {
@@ -1314,7 +1240,7 @@ async function boot() {
     setTimeout(() => say(e.message), 0);
   }
 
-  if (shared && !linkedLab) {
+  if (shared) {
     // Someone followed a link on purpose, so it wins — but not silently over
     // work that has not been saved anywhere.
     if (!restored || !store.isDirty() ||
@@ -1326,10 +1252,6 @@ async function boot() {
       setTimeout(() => say(`Opened "${store.state.title}" from a shared link.`), 0);
     }
     clearHash();
-  } else if (linkedLab) {
-    openLab(linkedLab);
-    setLab(linkedLab);
-    setTimeout(() => say(`Opened ${linkedLab.title} from a lab link.`), 0);
   } else if (!restored) {
     store.state.analysis = { ...DEFAULT_ANALYSIS };
     store.loadCircuit(LABS[0].circuit);
@@ -1367,5 +1289,4 @@ window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, 
     try { localStorage.removeItem("q-circuits-labwork-v1"); } catch { /* storage blocked */ }
   },
   currentLab: () => currentLab,
-  simulate, diagram, labUrl, decodeLab,
-  labs: { LABS, runChecks, labById, corners, diagramFor, allLabs, acceptLab } };
+  simulate, diagram, labs: { LABS, runChecks, labById, corners, diagramFor } };

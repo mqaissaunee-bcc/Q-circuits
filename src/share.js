@@ -12,9 +12,6 @@
 
 const PREFIX_COMPRESSED = "c";
 const PREFIX_PLAIN = "j";
-// A whole lab travels the same way as a circuit, under its own prefixes.
-const PREFIX_LAB_COMPRESSED = "L";
-const PREFIX_LAB_PLAIN = "l";
 
 /* ------------------------------------------------------- base64url helpers */
 
@@ -87,41 +84,6 @@ export async function encodeCircuit(state) {
   return packed && packed.length < bytes.length
     ? `#${PREFIX_COMPRESSED}=${bytesToBase64Url(packed)}`
     : `#${PREFIX_PLAIN}=${bytesToBase64Url(bytes)}`;
-}
-
-/** Encode any JSON payload into a hash fragment with the given prefixes. */
-async function encodePayload(value, compressed, plain) {
-  const bytes = new TextEncoder().encode(JSON.stringify(value));
-  const packed = await deflate(bytes);
-  return packed && packed.length < bytes.length
-    ? `#${compressed}=${bytesToBase64Url(packed)}`
-    : `#${plain}=${bytesToBase64Url(bytes)}`;
-}
-
-/** A shareable link that carries a whole lab file. */
-export async function labUrl(doc, href = window.location.href) {
-  const base = href.split("#")[0];
-  return base + (await encodePayload(doc, PREFIX_LAB_COMPRESSED, PREFIX_LAB_PLAIN));
-}
-
-/**
- * The lab in a link, or null when the link carries something else. Throws a
- * readable message when the link is damaged, as a truncated link is the most
- * common way one fails.
- */
-export async function decodeLab(hash = window.location.hash) {
-  const raw = String(hash || "").replace(/^#/, "");
-  const eq = raw.indexOf("=");
-  if (eq < 1) return null;
-  const kind = raw.slice(0, eq);
-  if (kind !== PREFIX_LAB_COMPRESSED && kind !== PREFIX_LAB_PLAIN) return null;
-  try {
-    const bytes = base64UrlToBytes(raw.slice(eq + 1));
-    const json = new TextDecoder().decode(kind === PREFIX_LAB_COMPRESSED ? await inflate(bytes) : bytes);
-    return JSON.parse(json);
-  } catch {
-    throw new Error("That lab link could not be read. It may have been cut short when it was copied.");
-  }
 }
 
 /** Full shareable URL for the current circuit. */

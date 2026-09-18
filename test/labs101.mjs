@@ -31,9 +31,7 @@ function check(name, ok, detail = "") {
   ok ? pass++ : fail++;
 }
 
-// PW_CHROME lets the suite run against a Chromium that is already on the
-// machine, instead of the one Playwright downloads.
-const browser = await chromium.launch(process.env.PW_CHROME ? { executablePath: process.env.PW_CHROME } : {});
+const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
@@ -1032,6 +1030,39 @@ if (process.env.SHOTS) {
 
 /* ------------------------------------------------------------- the UI */
 
+console.log("\n— palette icons —");
+const icons = await page.evaluate(() => {
+  const out = { empty: [], noLabel: [], exposed: [], count: 0, tiny: [] };
+  ["analog", "digital"].forEach((tab) => {
+    document.querySelector(`#partTools [data-tab="${tab}"]`).click();
+    document.querySelectorAll("#partTools button[data-tool]").forEach((b) => {
+      if (b.hidden) return;
+      out.count++;
+      const svg = b.querySelector("svg.part-icon");
+      const label = b.querySelector("span");
+      if (!svg || !svg.querySelectorAll("path").length) out.empty.push(b.dataset.tool);
+      if (!label || !label.textContent.trim()) out.noLabel.push(b.dataset.tool);
+      if (svg && svg.getAttribute("aria-hidden") !== "true") out.exposed.push(b.dataset.tool);
+      // an icon squeezed to a sliver is unreadable
+      const r = svg?.getBoundingClientRect();
+      if (r && (r.width < 12 || r.height < 10)) out.tiny.push(`${b.dataset.tool} ${Math.round(r.width)}×${Math.round(r.height)}`);
+    });
+  });
+  document.querySelector('#partTools [data-tab="analog"]').click();
+  return out;
+});
+check("every part button draws an icon", !icons.empty.length, icons.empty.join(", "));
+check("every part button keeps its written name", !icons.noLabel.length, icons.noLabel.join(", "));
+check("icons are decorative, so screen readers read the name only", !icons.exposed.length, icons.exposed.join(", "));
+check("no icon is squeezed to a sliver", !icons.tiny.length, icons.tiny.join(", "));
+const barIcons = await page.evaluate(() => document.querySelector(".toolbar-strip").offsetHeight);
+check("the icons do not push the toolbar past two rows", barIcons < 140, `${barIcons}px`);
+const namedBtn = await page.evaluate(() => {
+  const b = document.querySelector('#partTools button[data-tool="R"]');
+  return { text: b.textContent.trim(), title: b.title };
+});
+check("a part button is still named by its text, not only its tooltip", namedBtn.text === "R" && namedBtn.title === "Resistor", JSON.stringify(namedBtn));
+
 console.log("\n— sheet tools —");
 await page.evaluate(() => { document.getElementById("axisBox").open = false; window.scrollTo(0, 0); });
 await page.evaluate(() => window.T.open("e101-06a"));
@@ -1117,6 +1148,11 @@ void phoneState;
 check("on a phone the diagram starts closed", phoneWin.closedFirst);
 check("on a phone it docks full width along the bottom", phoneWin.docked, JSON.stringify(phoneWin));
 check("no sideways scrolling on a phone with it open", phoneWin.overflow === 0, `${phoneWin.overflow}px`);
+const phonePalette = await phone.evaluate(() => {
+  const t = document.getElementById("partTools");
+  return { rows: t.getBoundingClientRect().height, scrolls: t.scrollWidth > t.clientWidth, page: document.documentElement.scrollWidth - innerWidth };
+});
+check("on a phone the palette scrolls sideways instead of wrapping", phonePalette.scrolls && phonePalette.rows < 110 && phonePalette.page === 0, JSON.stringify(phonePalette));
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 await browser.close();

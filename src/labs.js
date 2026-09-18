@@ -3299,40 +3299,6 @@ export const LAB_KINDS = {
 
 export const LABS = [...EXPLORATIONS, ...ELEC101].map((l) => ({ kind: "explore", ...l }));
 
-/**
- * Labs imported from a file. They are compiled from JSON by `labfile.js` into
- * the same shape as the labs above, so everything downstream — the lab list,
- * runChecks, saved work, the diagram window — treats them alike.
- */
-export const IMPORTED = [];
-
-export function registerImported(lab) {
-  const at = IMPORTED.findIndex((l) => l.id === lab.id);
-  if (at >= 0) IMPORTED[at] = lab; else IMPORTED.push(lab);
-  return lab;
-}
-
-export function unregisterImported(id) {
-  const at = IMPORTED.findIndex((l) => l.id === id);
-  if (at >= 0) IMPORTED.splice(at, 1);
-}
-
-/** Every lab on offer: built in first, then imported. */
-export function allLabs() {
-  return [...LABS, ...IMPORTED];
-}
-
-/** The groups the lab list shows, including one per imported lab group. */
-export function groupsFor(labs = allLabs()) {
-  const groups = [...LAB_GROUPS];
-  labs.forEach((l) => {
-    if (!l.imported) return;
-    if (groups.some((g) => g.id === l.group)) return;
-    groups.push({ id: l.group, title: l.groupTitle || "Imported labs" });
-  });
-  return groups;
-}
-
 /* -------------------------------------------------------------- checking */
 
 /**
@@ -3381,7 +3347,7 @@ export async function runChecks(lab, store, onProgress) {
 }
 
 export function labById(id) {
-  return allLabs().find((l) => l.id === id) || null;
+  return LABS.find((l) => l.id === id) || null;
 }
 
 export { PARTS, K, corners };

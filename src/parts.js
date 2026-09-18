@@ -777,6 +777,35 @@ export const PALETTE_TABS = {
 export const PALETTE = ["R", "C", "L", "V", "VPULSE", "I", "D", "SW", "AM", "XFORM", "GND", "NET", "PWR", "PORT", "NPN", "PNP", "NJF", "NMOS", "PMOS", "OPAMP", "OPAMP5", "PARAM",
   "GATE2", "GATE3", "INV", "JKFF", "MUX151", "DEC154", "STIM", "DCLK", "DHI", "BUSENTRY"];
 
+
+/**
+ * Palette icons.
+ *
+ * Most parts draw their own symbol on the button, which keeps the picture
+ * and the part in step for free. These are the exceptions: chips whose full
+ * symbol is far taller than a toolbar row and would shrink to a sliver, and
+ * label-like parts whose real symbol is mostly text. Drawn in a 56 × 44 box.
+ */
+export const PART_ICONS = {
+  JKFF: { box: [0, 0, 56, 44], paths: ["M14 6H42V38H14Z", "M2 14H14", "M2 30H14", "M42 14H54", "M14 26L21 30L14 34"] },
+  MUX151: { box: [0, 0, 56, 44], paths: ["M16 6L44 16V30L16 40Z", "M2 12H16", "M2 22H16", "M2 32H16", "M44 23H54"] },
+  DEC154: { box: [0, 0, 56, 44], paths: ["M14 4H40V40H14Z", "M2 12H14", "M2 28H14", "M40 10H54", "M40 18H54", "M40 26H54", "M40 34H54"] },
+  XFORM: {
+    box: [0, 0, 56, 44],
+    paths: ["M4 10H18", "M4 34H18", "M38 10H52", "M38 34H52",
+      "M18 10a5 5 0 0 1 0 8a5 5 0 0 1 0 8a5 5 0 0 1 0 8", "M38 10a5 5 0 0 0 0 8a5 5 0 0 0 0 8a5 5 0 0 0 0 8",
+      "M25 8V36", "M31 8V36"]
+  },
+  STIM: { box: [0, 0, 56, 44], paths: ["M4 10H38L48 22L38 34H4Z", "M10 29V19H20V29H30V19H34"] },
+  DCLK: { box: [0, 0, 56, 44], paths: ["M4 10H38L48 22L38 34H4Z", "M9 29V19H15V29H21V19H27V29H33V19H36"] },
+  DHI: { box: [0, 0, 56, 44], paths: ["M4 10H38L48 22L38 34H4Z", "M16 16V28", "M26 16V28M22 19L26 16"] },
+  NET: { box: [0, 0, 56, 44], paths: ["M2 34H54", "M18 34V16", "M18 16H46V27H18"] },
+  PARAM: {
+    box: [0, 0, 56, 44],
+    paths: ["M24 10c-8 0-4 10-12 12c8 2 4 12 12 12", "M32 10c8 0 4 10 12 12c-8 2-4 12-12 12", "M10 22h4"]
+  }
+};
+
 /** Parts that make a circuit digital, for the plot's logic lanes. */
 export const isDigital = (c) => !!PARTS[c.type]?.digital;
 
