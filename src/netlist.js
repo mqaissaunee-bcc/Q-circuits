@@ -459,10 +459,12 @@ const MULT = { t: 1e12, g: 1e9, meg: 1e6, k: 1e3, m: 1e-3, mil: 25.4e-6, u: 1e-6
 
 export function parseValue(s) {
   if (s === null || s === undefined) return NaN;
-  const m = String(s).trim().match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(meg|mil|[tgkmunpf])?/i);
+  // µ as well as u: the plot prints readings with µ, and copying one back in
+  // should mean what it says rather than a millionfold error.
+  const m = String(s).trim().match(/^([+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)\s*(meg|mil|[tgkmunpf\u00B5\u03BC])?/i);
   if (!m) return NaN;
   let v = parseFloat(m[1]);
-  const suf = (m[2] || "").toLowerCase();
+  const suf = (m[2] || "").toLowerCase().replace(/[\u00B5\u03BC]/, "u");
   if (suf && MULT[suf] !== undefined) v *= MULT[suf];
   return v;
 }

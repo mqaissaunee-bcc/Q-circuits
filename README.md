@@ -589,6 +589,14 @@ definition rather than to the diagram.
 Draw the circuit, copy it, paste it. `test/labs101.mjs` checks the round trip:
 a sheet copied out and loaded back is the same circuit.
 
+### Typing readings back
+
+Values and answers accept SPICE suffixes, and **µ** as well as **u**. The
+plot prints readings as `-400.2µ`, so copying one into an answer box is the
+natural move; before, the µ was ignored and the answer came out a millionfold
+too large and was marked wrong with no hint why. The Greek mu (U+03BC) that
+some keyboards produce works too.
+
 ### Plot cursors
 
 Click the plot to place cursor A, shift-click for B. The readout under it

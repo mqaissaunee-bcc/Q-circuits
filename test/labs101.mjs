@@ -1660,6 +1660,49 @@ check("leaving the lab closes the diagram's window", pop2.isClosed(), `closed: $
 const remembered = await page.evaluate(() => JSON.parse(localStorage.getItem("q-circuits-diagram-v1") || "{}").popup || null);
 check("the pop-out's size is remembered for next time", !!remembered && remembered.w > 200 && remembered.h > 200, JSON.stringify(remembered));
 
+console.log("\n— readings typed back from the plot —");
+const suffixes = await page.evaluate(() => {
+  const p = window.__spiceLab.netlist ? window.__spiceLab.netlist.parseValue : null;
+  const parse = p || ((v) => NaN);
+  return {
+    micro: parse("-400.2\u00B5"),          // the µ the plot prints
+    greek: parse("-400.2\u03BC"),          // the Greek mu some keyboards give
+    u: parse("-400.2u"),
+    sci: parse("-400.2e-6"),
+    withUnit: parse("2.2 \u00B5F"),
+    kilo: parse("4.7k")
+  };
+});
+check("a reading copied from the plot with µ means micro, not units",
+  Math.abs(suffixes.micro - suffixes.u) < 1e-12 && Math.abs(suffixes.micro + 400.2e-6) < 1e-12, JSON.stringify(suffixes));
+check("the Greek mu works too, as some keyboards produce it",
+  Math.abs(suffixes.greek - suffixes.u) < 1e-12, String(suffixes.greek));
+check("plain u, scientific notation and other suffixes are unchanged",
+  Math.abs(suffixes.sci + 400.2e-6) < 1e-12 && Math.abs(suffixes.withUnit - 2.2e-6) < 1e-12 && suffixes.kilo === 4700,
+  JSON.stringify(suffixes));
+
+// And the answer box accepts it end to end.
+const answered = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  L.freshLabs();
+  const sel = document.getElementById("labSelect");
+  sel.value = "e101-05b"; sel.dispatchEvent(new Event("change"));
+  S.loadCircuit({ ...L.labs.diagramFor(L.labs.labById("e101-05b")), title: "LAB 05B" });
+  // The same two readings, written two ways: a suffix and microamps with µ.
+  // Read the true values off the run, then type them back two ways: with a
+  // suffix, and with the µ the plot prints.
+  const first = await L.labs.runChecks(L.labs.labById("e101-05b"), S);
+  const trace = first.result.traces.find((t) => t.type === "current");
+  const peak = Math.max(...trace.values), least = Math.min(...trace.values);
+  S.edit((s) => {
+    s.answers = { ipk: `${(peak * 1000).toPrecision(4)}m`, imin: `${(least * 1e6).toPrecision(4)}\u00B5` };
+  }, "t");
+  const out = await L.labs.runChecks(L.labs.labById("e101-05b"), S);
+  return { marks: out.results.filter((r) => r.answer).map((r) => r.pass), typed: S.state.answers };
+});
+check("an answer typed with a suffix, or with µ, is marked on its value",
+  answered.marks.length === 2 && answered.marks.every(Boolean), JSON.stringify(answered));
+
 console.log("\n— checking my work —");
 const marking = await page.evaluate(async () => {
   const L = window.__spiceLab, S = L.store;

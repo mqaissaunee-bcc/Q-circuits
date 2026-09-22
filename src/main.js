@@ -1197,7 +1197,7 @@ function renderQuestions(lab) {
   host.appendChild(h);
   const hint = document.createElement("p");
   hint.className = "field-hint";
-  hint.textContent = "Numbers only. SPICE suffixes work: 4.2m, 17.9k.";
+  hint.textContent = "Numbers only. SPICE suffixes work: 4.2m, 17.9k, 400.2u (or µ, as the plot prints it).";
   host.appendChild(hint);
   qs.forEach((q) => {
     host.appendChild(field(q.prompt, "text", store.state.answers?.[q.id] ?? "", (v) => {
@@ -1714,4 +1714,5 @@ window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, 
   },
   currentLab: () => currentLab,
   build: BUILD_STAMP,
+  netlist: { parseValue },
   simulate, diagram, buildSubmissionSheet, labDiagramSource, parts: { shapeOf, PARTS }, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor, variantFor, encodeOutcome, decodeOutcome, scoreOf } };
