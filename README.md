@@ -411,6 +411,15 @@ floating window, drawn by the same renderer as the sheet but read-only:
 - *The circuit in words* underneath lists every part, its value and the
   nodes it joins, as the text equivalent of the drawing.
 
+**Pop out** moves the diagram into a browser window of its own, which can be
+dragged to a second monitor and maximised there. The diagram itself moves,
+not a copy, so it keeps panning, zooming and fitting, and it follows the
+student to the next lab. Closing that window, pressing *Put back*, or Escape
+brings it home; leaving the lab, or closing the page, closes it. The page's
+stylesheets are copied into the new window, so it matches the theme. On a
+phone the button is hidden: there is no second monitor, and a pop-out there
+is only another tab.
+
 The diagrams are data (`DIAGRAMS` in `src/labs.js`), not images, so they stay
 crisp and follow dark mode. `test/labs101.mjs` loads each one onto the sheet
 and requires it to pass its own lab. The window uses a store created with
@@ -650,6 +659,45 @@ name.
 Each sheet carries a short **check code** over the student, exercise, date
 and score. It is a checksum, not a signature: it catches a sheet edited after
 the fact and would not stop a determined forgery.
+
+## Exams
+
+An exam item is a lab with `exam: true`, and three differences.
+
+**It is marked once.** *Check my work* becomes *Submit exam answer*: the
+student gets a score and a sheet to hand in, not a list of what to fix. It
+will not submit without a name on it.
+
+**No reference diagram.** The question paper is the only picture.
+
+**Its values follow the student.** `vary` maps a value to its choices, and
+`variantFor` draws from them using a hash of the exam id and the student's
+name: the same student always gets the same paper, and two students rarely
+get the same one. A copied reading is the wrong reading. Because the values
+differ per student, `tasks`, `circuit`, `questions` and `checks` may each be
+written as a function of the variant, so all four can speak about the values
+that student got.
+
+**Marks.** Any check or question may carry `points:`; anything without one is
+worth a mark. `scoreOf` totals them.
+
+**The result code.** The student can see their own sheet, so the sheet cannot
+list which checks failed: it carries the score and a code. Paste that into
+*Mark a submitted answer sheet* in the Lab panel (full view) to see the
+breakdown with the marks each check was worth. The code has a checksum, so an
+edited one is refused rather than misread — that catches casual editing and
+would not stop a determined forgery.
+
+Two examples ship in `EXAMS` in `src/labs.js`: a fix-it midterm item and a
+draw-it final item. Both are worth copying for new ones.
+
+### What an exam cannot do
+
+This runs in the student's browser. Nothing here stops someone opening the
+practice lab in another tab, loading a classmate's saved circuit, or editing
+a PNG. Per-student values are the strongest defence, because they make copied
+answers wrong. Anything higher-stakes wants the conditions you would use for
+any in-browser exam: a proctored room or a lockdown browser.
 
 ### Lab view and full view
 

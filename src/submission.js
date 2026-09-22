@@ -59,7 +59,7 @@ function palette() {
  *
  * `outcome` is what runChecks returned. Returns a PNG blob.
  */
-export async function buildSubmissionSheet({ svg, sheetBox, plotCanvas, lab, state, outcome }) {
+export async function buildSubmissionSheet({ svg, sheetBox, plotCanvas, lab, state, outcome, exam = null }) {
   const c = palette();
   const tb = state.titleBlock || {};
   const date = tb.date || new Date().toISOString().slice(0, 10);
@@ -79,9 +79,12 @@ export async function buildSubmissionSheet({ svg, sheetBox, plotCanvas, lab, sta
   const schematicH = Math.min(620, Math.round((schematic.height / schematic.width) * inner));
   const plotH = plot ? Math.min(460, Math.round((plot.height / plot.width) * inner)) : 0;
   const lineH = 30;
-  const answers = (lab?.questions || []).map((q) => [q.prompt, String(state.answers?.[q.id] ?? "").trim() || "—"]);
+  const questions = typeof lab?.questions === "function" ? lab.questions(outcome.variant || {}) : (lab?.questions || []);
+  const answers = questions.map((q) => [q.prompt, String(state.answers?.[q.id] ?? "").trim() || "—"]);
+  // An exam sheet carries the score and a code, not a list of what failed:
+  // the student can see this sheet, and whoever marks it decodes the code.
   const bodyH = (answers.length ? 46 + answers.length * lineH : 0) +
-    46 + outcome.results.reduce((h, r) => h + lineH + (r.detail ? 22 : 0), 0);
+    (exam ? 120 : 46 + outcome.results.reduce((h, r) => h + lineH + (r.detail ? 22 : 0), 0));
   const height = MARGIN + 150 + schematicH + 40 + (plot ? plotH + 40 : 0) + bodyH + MARGIN;
 
   const canvas = document.createElement("canvas");
@@ -131,9 +134,11 @@ export async function buildSubmissionSheet({ svg, sheetBox, plotCanvas, lab, sta
   });
   y += 44;
 
-  const verdict = outcome.ok ? `Passed all ${total} checks` : `${passed} of ${total} checks passed`;
+  const verdict = exam
+    ? `${exam.earned} of ${exam.total} marks (${Math.round(exam.percent)}%)`
+    : outcome.ok ? `Passed all ${total} checks` : `${passed} of ${total} checks passed`;
   text(verdict, MARGIN, y + 20, { font: `700 18px ${sans}`, color: outcome.ok ? c.ok : c.bad });
-  text(`Check code ${code}`, WIDTH - MARGIN, y + 20, { font: `14px ${mono}`, color: c.soft, align: "right" });
+  text(exam ? "Exam answer sheet" : `Check code ${code}`, WIDTH - MARGIN, y + 20, { font: `14px ${mono}`, color: c.soft, align: "right" });
   y += 34;
   rule(y);
   y += 24;
@@ -160,6 +165,22 @@ export async function buildSubmissionSheet({ svg, sheetBox, plotCanvas, lab, sta
       y += lineH;
     });
     y += 16;
+  }
+
+  if (exam) {
+    text("Result code", MARGIN, y, { font: `700 15px ${sans}` });
+    y += 24;
+    text("Hand this sheet in. The code carries the result for marking.", MARGIN + 16, y, { color: c.soft, font: `13px ${sans}` });
+    y += 26;
+    // Long codes wrap rather than run off the page.
+    const chunk = 78;
+    for (let i = 0; i < exam.code.length; i += chunk) {
+      text(exam.code.slice(i, i + chunk), MARGIN + 16, y, { font: `13px ${mono}` });
+      y += 20;
+    }
+    return new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("The submission sheet could not be encoded."))), "image/png");
+    });
   }
 
   text("Checks", MARGIN, y, { font: `700 15px ${sans}` });

@@ -161,6 +161,16 @@
                   title="Check the work and save one image to hand in: schematic, plot, readings and results">Save submission sheet</button>
           <button type="button" id="btnLabReset" class="ghost" hidden>Start over</button>
         </div>
+        <details class="exam-decode" id="examDecode">
+          <summary>Mark a submitted answer sheet</summary>
+          <p class="field-hint">Paste the result code from a student's exam sheet to see which checks passed. Full view only.</p>
+          <div class="field">
+            <label for="examCode">Result code</label>
+            <input type="text" id="examCode" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="btn-row">
+            <button type="button" id="btnDecode" class="ghost">Decode</button>
+        </div>
         <div id="checkResults"></div>
       </div>
     </section>
@@ -459,6 +469,8 @@
        aria-label="Reference diagram window. Drag, or use the arrow keys, to move it. Escape closes it.">
     <h2 id="diagramTitle">Reference diagram</h2>
     <span class="head-actions">
+      <button type="button" id="btnDiagramPop" class="ghost"
+              title="Open the diagram in its own window, to move to another monitor">Pop out</button>
       <button type="button" id="btnDiagramFit" class="ghost">Fit</button>
       <button type="button" id="btnDiagramClose" class="ghost" aria-label="Close the reference diagram">Close</button>
     </span>

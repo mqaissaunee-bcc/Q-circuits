@@ -1560,6 +1560,199 @@ const badFourier = await page.evaluate(() => {
 });
 check("Fourier without a fundamental is explained", /fundamental frequency/i.test(badFourier), badFourier.slice(0, 120));
 
+console.log("\n— the diagram in its own window —");
+await page.evaluate(() => {
+  const L = window.__spiceLab;
+  L.freshLabs();
+  localStorage.removeItem("q-circuits-diagram-v1");
+  const sel = document.getElementById("labSelect");
+  sel.value = "e101-06a"; sel.dispatchEvent(new Event("change"));
+  if (document.getElementById("diagramWin").hidden) document.getElementById("btnDiagram").click();
+});
+const [pop] = await Promise.all([page.waitForEvent("popup"), page.click("#btnDiagramPop")]);
+await pop.waitForLoadState();
+await pop.waitForTimeout(200);
+const inPop = await pop.evaluate(() => ({
+  win: !!document.getElementById("diagramWin"),
+  parts: document.querySelectorAll("#diagramWin .part").length,
+  styled: getComputedStyle(document.getElementById("diagramWin")).position,
+  width: document.getElementById("diagramWin").getBoundingClientRect().width,
+  title: document.title,
+  button: document.getElementById("btnDiagramPop").textContent
+}));
+const inPage = await page.evaluate(() => !!document.getElementById("diagramWin"));
+check("Pop out moves the diagram into a window of its own", inPop.win && !inPage && inPop.parts > 3, JSON.stringify(inPop));
+check("it fills that window, with the page's styles", inPop.styled === "static" && inPop.width > 600, `${inPop.styled}, ${Math.round(inPop.width)} px`);
+check("the window is titled with the lab", /6A/.test(inPop.title), inPop.title);
+
+const followed = await page.evaluate(() => {
+  const sel = document.getElementById("labSelect");
+  sel.value = "e101-12a"; sel.dispatchEvent(new Event("change"));
+  return true;
+});
+void followed;
+await pop.waitForTimeout(200);
+const afterSwitch = await pop.evaluate(() => ({
+  title: document.getElementById("diagramTitle").textContent,
+  parts: document.querySelectorAll("#diagramWin .part").length
+}));
+check("it follows the student to the next lab", /12A/.test(afterSwitch.title) && afterSwitch.parts > 10, JSON.stringify(afterSwitch));
+
+const fitWorks = await pop.evaluate(() => {
+  document.getElementById("btnDiagramFit").click();
+  return document.querySelector("#diagramHost svg").getAttribute("viewBox");
+});
+check("pan, zoom and Fit still work in the popped-out window", !!fitWorks, fitWorks);
+
+await pop.close();
+await page.waitForTimeout(200);
+const home = await page.evaluate(() => ({
+  win: !!document.getElementById("diagramWin"),
+  popped: document.getElementById("diagramWin")?.classList.contains("is-popped"),
+  button: document.getElementById("btnDiagramPop")?.textContent,
+  parts: document.querySelectorAll("#diagramWin .part").length
+}));
+check("closing that window puts the diagram back on the page", home.win && !home.popped && home.button === "Pop out" && home.parts > 10, JSON.stringify(home));
+
+const [pop2] = await Promise.all([page.waitForEvent("popup"), page.click("#btnDiagramPop")]);
+await pop2.waitForLoadState();
+await page.evaluate(() => {
+  const sel = document.getElementById("labSelect");
+  sel.value = ""; sel.dispatchEvent(new Event("change"));      // free build: no diagram
+});
+await page.waitForTimeout(200);
+check("leaving the lab closes the diagram's window", pop2.isClosed(), `closed: ${pop2.isClosed()}`);
+
+console.log("\n— exams —");
+
+const examBasics = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  L.freshLabs();
+  const sel = document.getElementById("labSelect");
+  sel.value = "exam-mid-1"; sel.dispatchEvent(new Event("change"));
+  return {
+    kind: document.getElementById("labKind").textContent,
+    check: document.getElementById("btnCheck").textContent,
+    diagramButton: document.getElementById("btnDiagram").hidden,
+    diagramWindow: document.getElementById("diagramWin").hidden,
+    submitButton: document.getElementById("btnSubmit").hidden
+  };
+});
+check("an exam has no reference diagram", examBasics.diagramButton && examBasics.diagramWindow, JSON.stringify(examBasics));
+check("its button says submit, not check", /Submit exam answer/.test(examBasics.check), examBasics.check);
+
+// Values follow the student's name, and the same name always gives the same draw.
+const variants = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  const lab = L.labs.labById("exam-mid-1");
+  const draw = (name) => L.labs.variantFor(lab, name);
+  return { sam: draw("Sam Rivera"), again: draw("Sam Rivera"), alex: draw("Alex Chen"), jo: draw("Jo Patel") };
+});
+check("a student's exam values are drawn from their name",
+  JSON.stringify(variants.sam) === JSON.stringify(variants.again), JSON.stringify(variants.sam));
+check("and two students get different papers",
+  JSON.stringify(variants.sam) !== JSON.stringify(variants.alex) || JSON.stringify(variants.sam) !== JSON.stringify(variants.jo),
+  `${JSON.stringify(variants.sam)} vs ${JSON.stringify(variants.alex)}`);
+
+// A correct answer to the fix-it exam scores full marks.
+const sat = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  const lab = L.labs.labById("exam-mid-1");
+  S.edit((s) => { s.titleBlock = { ...s.titleBlock, name: "Sam Rivera", date: "2026-09-18" }; }, "t");
+  const v = L.labs.variantFor(lab, "Sam Rivera");
+  // build the corrected circuit
+  S.loadCircuit({
+    comps: [
+      { type: "V", x: 160, y: 200, rot: 90, label: "VS", value: `DC ${v.VS}`, ac: "" },
+      { type: "R", x: 220, y: 140, label: "R1", value: v.R1 },
+      { type: "R", x: 340, y: 200, rot: 90, label: "R2", value: v.R2 },
+      { type: "NET", x: 340, y: 140, label: "NOUT", name: "OUT" },
+      { type: "GND", x: 250, y: 300, label: "GND" }
+    ],
+    wires: [
+      { x1: 160, y1: 200, x2: 160, y2: 140 }, { x1: 160, y1: 140, x2: 220, y2: 140 },
+      { x1: 280, y1: 140, x2: 340, y2: 140 }, { x1: 340, y1: 140, x2: 340, y2: 200 },
+      { x1: 340, y1: 260, x2: 340, y2: 280 }, { x1: 340, y1: 280, x2: 160, y2: 280 },
+      { x1: 160, y1: 260, x2: 160, y2: 280 }, { x1: 250, y1: 280, x2: 250, y2: 300 }
+    ],
+    probes: [], title: "Untitled circuit"
+  });
+  const want = (Number(v.VS) * L.labs.parseValue?.(v.R2) || 0);
+  void want;
+  const vout = (parseFloat(v.VS) * (parseFloat(v.R2) * (/k$/.test(v.R2) ? 1000 : 1))) /
+    (parseFloat(v.R1) * (/k$/.test(v.R1) ? 1000 : 1) + parseFloat(v.R2) * (/k$/.test(v.R2) ? 1000 : 1));
+  S.edit((s) => { s.answers = { vout: vout.toFixed(3) }; s.analysis.type = "op"; }, "t");
+  const out = await L.labs.runChecks(lab, S);
+  return { score: out.score, ok: out.ok, failed: out.results.filter((r) => !r.pass).map((r) => r.label) };
+});
+check("a correct answer scores full marks", sat.score.earned === sat.score.total,
+  `${sat.score.earned} of ${sat.score.total}${sat.failed.length ? ` — missed: ${sat.failed.join("; ")}` : ""}`);
+
+const untouched = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  const lab = L.labs.labById("exam-mid-1");
+  L.freshLabs();
+  const sel = document.getElementById("labSelect");
+  sel.value = "exam-mid-1"; sel.dispatchEvent(new Event("change"));
+  S.edit((s) => { s.titleBlock = { ...s.titleBlock, name: "Sam Rivera" }; }, "t");
+  const out = await L.labs.runChecks(lab, S);
+  return { earned: out.score.earned, total: out.score.total };
+});
+check("the faulty sheet an exam starts from scores poorly until it is fixed",
+  untouched.earned < untouched.total / 2, `${untouched.earned} of ${untouched.total}`);
+
+// Marks are weighted, and the code round-trips.
+const coded = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  const lab = L.labs.labById("exam-mid-1");
+  const v = L.labs.variantFor(lab, "Sam Rivera");
+  const checks = lab.checks(v);
+  const results = checks.map((c, i) => ({ pass: i !== 1 }));       // wiring missed
+  const partial = L.labs.scoreOf(checks, results);
+  const code = L.labs.encodeOutcome({ labId: lab.id, name: "Sam Rivera", date: "2026-09-18", results });
+  return { partial, code, decoded: L.labs.decodeOutcome(code), tampered: L.labs.decodeOutcome(code.replace(/^./, "X")) };
+});
+check("checks carry marks, so a missed one costs more than a mark",
+  coded.partial.total > coded.partial.earned + 1, JSON.stringify(coded.partial));
+const weighting = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  const lab = L.labs.labById("exam-mid-1");
+  const v = L.labs.variantFor(lab, "Sam Rivera");
+  const checks = lab.checks(v);
+  const questions = lab.questions(v);
+  const all = [...checks, ...questions.map((q) => ({ label: q.prompt, points: q.points }))];
+  const allPassed = all.map(() => ({ pass: true }));
+  const missedReading = all.map((c, i) => ({ pass: i < checks.length }));
+  return { total: L.labs.scoreOf(all, allPassed).earned, withoutReading: L.labs.scoreOf(all, missedReading).earned };
+});
+check("a reading worth three marks costs three when it is wrong",
+  weighting.total - weighting.withoutReading === 3, `${weighting.total} vs ${weighting.withoutReading}`);
+
+check("the result code carries the breakdown back",
+  coded.decoded && coded.decoded.name === "Sam Rivera" && coded.decoded.bits[1] === false, JSON.stringify(coded.decoded).slice(0, 120));
+check("an edited code is refused rather than misread", coded.tampered === null, JSON.stringify(coded.tampered));
+
+const decodeUi = await page.evaluate((code) => {
+  document.getElementById("examCode").value = code;
+  document.getElementById("btnDecode").click();
+  return {
+    score: document.querySelector("#checkResults .exam-score")?.textContent || "",
+    rows: [...document.querySelectorAll("#checkResults .check-list li")].map((li) => li.className)
+  };
+}, coded.code);
+check("pasting a code shows the student's score and which checks they missed",
+  /Sam Rivera/.test(decodeUi.score) && decodeUi.rows.includes("fail") && decodeUi.rows.filter((r) => r === "pass").length > 3,
+  `${decodeUi.score} · ${decodeUi.rows.join(",")}`);
+
+const examSubmit = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  L.store.edit((s) => { s.titleBlock = { ...s.titleBlock, name: "" }; }, "t");
+  document.getElementById("btnCheck").click();
+  await new Promise((r) => setTimeout(r, 200));
+  return { open: document.getElementById("titleBlockBox").open, focus: document.activeElement.id };
+});
+check("an exam will not be submitted without a name on it", examSubmit.open && examSubmit.focus === "tbName", JSON.stringify(examSubmit));
+
 console.log("\n— lab view and full view —");
 const views = await page.evaluate(() => {
   const L = window.__spiceLab;

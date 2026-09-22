@@ -700,3 +700,22 @@ dl.shortcuts kbd {
  */
 .view-condensed .parts-table { display: none; }
 #btnViewMode[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+/* exams */
+.lab-kind[data-kind="exam"] { background: var(--probe-soft); color: var(--probe); }
+.exam-result { border: 1px solid var(--rule); border-radius: var(--radius); padding: var(--sp-3); margin-top: var(--sp-2); }
+.exam-score { font-size: 1.1rem; font-weight: 700; margin: 0 0 var(--sp-1); }
+.exam-decode { border-top: 1px solid var(--rule); margin-top: var(--sp-3); padding-top: var(--sp-2); font-size: .85rem; }
+.exam-decode summary { cursor: pointer; font-weight: 600; }
+.view-condensed .exam-decode { display: none; }
+
+/* the reference diagram in a window of its own */
+body.diagram-popup { margin: 0; background: var(--panel); }
+.diagram-win.is-popped {
+  position: static; inset: auto; width: 100vw; height: 100vh;
+  max-width: none; max-height: none; border: none; border-radius: 0;
+  box-shadow: none; resize: none;
+}
+.diagram-win.is-popped .diagram-head { cursor: default; }
+/* A phone has no second monitor, and a pop-out there is just another tab. */
+@media (max-width: 760px) { #btnDiagramPop { display: none; } }

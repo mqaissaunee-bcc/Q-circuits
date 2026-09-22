@@ -12,7 +12,8 @@ import { Store, DEFAULT_ANALYSIS, DEFAULT_PLOT, DEFAULT_TITLE_BLOCK } from "./st
 import { createCanvas } from "./canvas.js";
 import { createScope } from "./scope.js";
 import { runNetlist, engineReady } from "./engine.js";
-import { LABS, LAB_GROUPS, LAB_KINDS, labById, runChecks, corners, diagramFor } from "./labs.js";
+import { LABS, LAB_GROUPS, LAB_KINDS, labById, runChecks, corners, diagramFor,
+  variantFor, labTasks, labCircuit, labQuestions, encodeOutcome, decodeOutcome, scoreOf } from "./labs.js";
 import { simulate, probedTraces, previewNetlist } from "./simulate.js";
 import { explainEngineError } from "./errors.js";
 import { shareUrl, decodeCircuit, clearHash } from "./share.js";
@@ -1031,15 +1032,16 @@ function openLab(lab) {
     say(`${lab.title}: started from your ${fromLab.title.split(" · ")[0]} circuit. Probes were not copied.`);
     return;
   }
-  store.loadCircuit(lab.circuit);
+  store.loadCircuit(labCircuit(lab, variantFor(lab, store.state.titleBlock?.name)));
   say(`${lab.title} loaded.`);
 }
 
 function setLab(lab) {
   currentLab = lab;
   store.currentLabId = lab ? lab.id : "";
-  $("btnDiagram").hidden = !lab;
-  diagram.setLab(lab);
+  // No reference diagram in an exam: the question paper is the only picture.
+  $("btnDiagram").hidden = !lab || !!lab.exam;
+  diagram.setLab(lab && !lab.exam ? lab : null);
   // A lab opens in the view its parts belong to; free build opens in full.
   setViewMode(lab ? "condensed" : "full", { announce: false });
   if (lab) setPaletteTab(/^e101-1[01]/.test(lab.id) ? "digital" : "analog");
@@ -1070,6 +1072,53 @@ labSelect.addEventListener("change", () => {
   canvas.setBias(null);
   canvas.fit();
   setLab(lab);
+});
+
+/**
+ * For whoever marks the exams: a student's sheet carries a code, and this
+ * turns it back into the list of checks with the marks each was worth.
+ */
+$("btnDecode").addEventListener("click", () => {
+  const host = $("checkResults");
+  host.replaceChildren();
+  const decoded = decodeOutcome($("examCode").value);
+  if (!decoded) {
+    say("That code could not be read. It may have been mistyped, or the sheet edited after it was made.");
+    return;
+  }
+  const lab = labById(decoded.labId);
+  if (!lab) {
+    say(`The code is for ${decoded.labId}, which is not an exam in this copy of Q Circuits.`);
+    return;
+  }
+  const variant = variantFor(lab, decoded.name);
+  const checks = [...(typeof lab.checks === "function" ? lab.checks(variant) : lab.checks),
+    ...(typeof lab.questions === "function" ? lab.questions(variant) : lab.questions || [])
+      .map((q) => ({ label: `Answer: ${q.prompt}`, points: q.points }))];
+  const results = checks.map((_, i) => ({ pass: !!decoded.bits[i] }));
+  const { earned, total, percent } = scoreOf(checks, results);
+
+  const head = document.createElement("p");
+  head.className = "exam-score";
+  head.textContent = `${decoded.name || "unnamed"} — ${lab.title} — ${earned} of ${total} marks (${Math.round(percent)}%) on ${decoded.date}`;
+  host.appendChild(head);
+
+  const ul = document.createElement("ul");
+  ul.className = "check-list";
+  checks.forEach((c, i) => {
+    const li = document.createElement("li");
+    li.className = results[i].pass ? "pass" : "fail";
+    const mark = document.createElement("span");
+    mark.className = "check-mark";
+    mark.textContent = results[i].pass ? "✓" : "✗";
+    const text = document.createElement("span");
+    const worth = c.points === undefined ? 1 : c.points;
+    text.textContent = `${c.label} (${worth} mark${worth === 1 ? "" : "s"})`;
+    li.append(mark, text);
+    ul.appendChild(li);
+  });
+  host.appendChild(ul);
+  say(`${decoded.name || "Unnamed"} scored ${earned} of ${total} marks.`);
 });
 
 $("btnLabReset").addEventListener("click", () => {
@@ -1111,13 +1160,17 @@ function renderLabPanel(lab) {
   }
   const kind = $("labKind");
   kind.hidden = false;
-  kind.textContent = LAB_KINDS[lab.kind] || "";
-  kind.dataset.kind = lab.kind;
+  kind.textContent = lab.exam ? LAB_KINDS.exam : LAB_KINDS[lab.kind] || "";
+  kind.dataset.kind = lab.exam ? "exam" : lab.kind;
+  // An exam is marked once and hands back a sheet, not a list of what to fix.
+  $("btnCheck").textContent = lab.exam ? "Submit exam answer" : "Check my work";
+  $("btnSubmit").hidden = !!lab.exam;
 
   $("labSummary").textContent = lab.summary;
+  const variant = variantFor(lab, store.state.titleBlock?.name);
   const ol = $("labTasks");
   ol.replaceChildren();
-  lab.tasks.forEach((t) => {
+  labTasks(lab, variant).forEach((t) => {
     const li = document.createElement("li");
     li.textContent = t;
     ol.appendChild(li);
@@ -1132,7 +1185,7 @@ function renderLabPanel(lab) {
 function renderQuestions(lab) {
   const host = $("labQuestions");
   host.replaceChildren();
-  const qs = lab.questions || [];
+  const qs = labQuestions(lab, variantFor(lab, store.state.titleBlock?.name));
   host.hidden = !qs.length;
   if (!qs.length) return;
   const h = document.createElement("h3");
@@ -1152,6 +1205,57 @@ function renderQuestions(lab) {
 }
 
 /**
+ * An exam hands back a score and a sheet to hand in. Which checks failed
+ * stays in the code on the sheet, for whoever marks it.
+ */
+async function showExamScore(outcome) {
+  const host = $("checkResults");
+  host.replaceChildren();
+  const { earned, total, percent } = outcome.score;
+  const date = titleBlockState().date || todayISO();
+  const code = encodeOutcome({
+    labId: currentLab.id, name: titleBlockState().name, date, results: outcome.results
+  });
+
+  const box = document.createElement("div");
+  box.className = "exam-result";
+  const score = document.createElement("p");
+  score.className = "exam-score";
+  score.textContent = `${earned} of ${total} marks (${Math.round(percent)}%)`;
+  const note = document.createElement("p");
+  note.textContent = outcome.error
+    ? "Your circuit did not simulate, so the marks that need a run were lost. The sheet below is still your answer."
+    : "Save the sheet and hand it in. It carries your circuit, your readings and this result.";
+  box.append(score, note);
+  host.appendChild(box);
+
+  store.saveLabWork(currentLab.id);
+  try {
+    const blob = await buildSubmissionSheet({
+      svg: canvas.svg,
+      sheetBox: canvas.contentBox(),
+      plotCanvas: document.querySelector(".scope-canvas"),
+      lab: currentLab,
+      state: store.state,
+      outcome,
+      exam: { code, earned, total, percent }
+    });
+    const name = `${slug(titleBlockState().name || "answer")}-${slug(currentLab.code || currentLab.id)}-exam.png`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    say(`${earned} of ${total} marks. Your answer sheet was saved as ${name}: hand that in.`);
+  } catch (e) {
+    say(`${earned} of ${total} marks, but the answer sheet could not be saved: ${e.message}`);
+  }
+}
+
+/**
  * Mark the current lab: run its checks, show them, record a pass. Returns the
  * outcome so the submission sheet can be built from the same run rather than
  * a second one that might disagree.
@@ -1164,6 +1268,16 @@ async function markLab() {
   const host = $("checkResults");
   host.replaceChildren();
   $("runError").replaceChildren();
+
+  if (currentLab.exam && !titleBlockState().name) {
+    $("titleBlockBox").open = true;
+    $("tbName").focus();
+    say("Type your name under the sheet first: your exam values and your answer sheet depend on it.");
+    running = false;
+    $("btnCheck").disabled = false;
+    $("btnSubmit").disabled = false;
+    return null;
+  }
 
   const note = $("engineNote");
   // Answers typed in the last moment may still be in the debounce.
@@ -1179,6 +1293,13 @@ async function markLab() {
   if (outcome.result) {
     lastResult = outcome.result;
     applyResult(outcome.result);
+  }
+
+  if (currentLab.exam) {
+    showExamScore(outcome);
+    running = false;
+    $("btnCheck").disabled = false;
+    return outcome;
   }
 
   const ul = document.createElement("ul");
@@ -1564,4 +1685,4 @@ window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, 
     try { localStorage.removeItem("q-circuits-labwork-v1"); } catch { /* storage blocked */ }
   },
   currentLab: () => currentLab,
-  simulate, diagram, buildSubmissionSheet, labDiagramSource, parts: { shapeOf, PARTS }, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor } };
+  simulate, diagram, buildSubmissionSheet, labDiagramSource, parts: { shapeOf, PARTS }, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor, variantFor, encodeOutcome, decodeOutcome, scoreOf } };

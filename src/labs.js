@@ -843,6 +843,9 @@ function answerCheck(q) {
   return {
     label: `Your answer: ${q.prompt}`,
     answer: true,
+    // A reading can be worth more than a mark, and the exam decoder reads
+    // the same figure back, so the two must agree.
+    points: q.points,
     test: (ctx) => {
       const raw = String(ctx.answers[q.id] ?? "").trim();
       if (!raw) return { pass: false, detail: "no answer entered yet" };
@@ -3273,7 +3276,207 @@ export function diagramFor(lab) {
   return DIAGRAMS[lab.id] || lab.diagram || lab.circuit;
 }
 
+
+/* ------------------------------------------------------------- exams */
+
+/**
+ * Exam items are labs with three differences: they carry marks, they are
+ * marked once rather than checked as you go, and their component values are
+ * drawn from the student's name, so no two students are answering quite the
+ * same question.
+ *
+ * A lab's `tasks`, `circuit`, `questions` and `checks` may each be a function
+ * of the variant, so all four can speak about the values that student got.
+ */
+
+/** A number from a string, stable across browsers and sessions. */
+function seedOf(text) {
+  let h = 2166136261;
+  for (const ch of String(text)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
+  return h;
+}
+
+/**
+ * The values this student gets. `vary` maps a name to the choices for it;
+ * everyone with the same name and exam gets the same draw, every time.
+ */
+export function variantFor(lab, studentName) {
+  if (!lab?.vary) return {};
+  const seed = seedOf(`${lab.id}\u241F${String(studentName || "").trim().toLowerCase()}`);
+  const out = {};
+  Object.entries(lab.vary).forEach(([key, options], i) => {
+    out[key] = options[(seed >>> (i * 3)) % options.length];
+  });
+  return out;
+}
+
+/** Fields that may be written as a function of the variant. */
+const resolve = (value, variant) => (typeof value === "function" ? value(variant) : value);
+
+export const labTasks = (lab, variant) => resolve(lab.tasks, variant) || [];
+export const labCircuit = (lab, variant) => resolve(lab.circuit, variant);
+export const labQuestions = (lab, variant) => resolve(lab.questions, variant) || [];
+export const labChecks = (lab, variant) => resolve(lab.checks, variant) || [];
+
+/** Marks: every check is worth one unless it says otherwise. */
+const pointsOf = (check) => (check.points === undefined ? 1 : check.points);
+
+/**
+ * A short code carrying which checks passed, for the instructor to decode.
+ * The student sees their score on the submission sheet; the breakdown lives
+ * in here, which is why the sheet does not list the checks.
+ */
+export function encodeOutcome({ labId, name, date, results }) {
+  const bits = results.map((r) => (r.pass ? "1" : "0")).join("");
+  const body = [labId, String(name || "").trim(), date, bits].join("\u241F");
+  const b64 = btoa(unescape(encodeURIComponent(body))).replace(/=+$/, "");
+  const sum = (seedOf(b64) % 46656).toString(36).toUpperCase().padStart(3, "0");
+  return `${b64}.${sum}`;
+}
+
+/** Read a code back. Returns null if it has been tampered with. */
+export function decodeOutcome(code) {
+  const [b64, sum] = String(code || "").trim().split(".");
+  if (!b64 || !sum) return null;
+  if ((seedOf(b64) % 46656).toString(36).toUpperCase().padStart(3, "0") !== sum.toUpperCase()) return null;
+  try {
+    const [labId, name, date, bits] = decodeURIComponent(escape(atob(b64))).split("\u241F");
+    return { labId, name, date, bits: bits.split("").map((b) => b === "1") };
+  } catch { return null; }
+}
+
+/** Score an outcome: points earned, points available. */
+export function scoreOf(checks, results) {
+  let earned = 0, total = 0;
+  checks.forEach((c, i) => {
+    const p = pointsOf(c);
+    total += p;
+    if (results[i]?.pass) earned += p;
+  });
+  return { earned, total, percent: total ? (earned / total) * 100 : 0 };
+}
+
 /* ------------------------------------------------------------ catalogue */
+
+
+/* ---------------------------------------------------------- exam items */
+
+/**
+ * Two worked examples of the exam format, ready to sit or to copy. Both vary
+ * their values by student, both carry marks, and neither has a reference
+ * diagram: the question paper is the only picture.
+ */
+const EXAMS = [
+  {
+    id: "exam-mid-1",
+    group: "exams",
+    code: "M1",
+    kind: "fix",
+    exam: true,
+    title: "Midterm 1 · Fix the divider",
+    summary: "The sheet has a divider with three faults in it. Correct them so the circuit matches the question paper, then submit.",
+    vary: { R1: ["1k", "1.5k", "2.2k", "3.3k"], R2: ["2.2k", "3.3k", "4.7k", "6.8k"], VS: ["9", "12", "15", "18"] },
+    tasks: (v) => [
+      "Type your name under the sheet before you start: your values depend on it.",
+      `The paper's circuit is VS = DC ${v.VS} with R1 = ${v.R1} above R2 = ${v.R2}, output taken at the junction and named OUT.`,
+      "Three things on this sheet are wrong. Find them and correct them.",
+      "Set the analysis to Operating point and run it.",
+      "Enter the voltage at OUT, then press Submit exam answer once."
+    ],
+    circuit: (v) => ({
+      title: "Untitled circuit",
+      analysis: { type: "tran" },
+      comps: [
+        // the faults: a wrong value, a short across R2, and no ground
+        P("V", 160, 200, 90, { label: "VS", value: `DC ${v.VS}`, ac: "" }),
+        P("R", 220, 140, 0, { label: "R1", value: "470" }),
+        P("R", 340, 200, 90, { label: "R2", value: v.R2 }),
+        NET(340, 140, "OUT")
+      ],
+      wires: [
+        W(160, 200, 160, 140), W(160, 140, 220, 140), W(280, 140, 340, 140),
+        W(340, 140, 340, 200), W(340, 200, 340, 260),
+        W(340, 260, 160, 260), W(160, 260, 160, 260 - 0),
+        W(340, 200, 400, 200), W(400, 200, 400, 260), W(400, 260, 340, 260)
+      ],
+      seq: { R: 2, V: 1 },
+      probes: []
+    }),
+    questions: (v) => [{
+      id: "vout",
+      prompt: "Voltage at OUT, in volts",
+      rel: 0.02,
+      points: 3,
+      expect: () => (parseValue(v.VS) * parseValue(v.R2)) / (parseValue(v.R1) + parseValue(v.R2))
+    }],
+    analysis: { type: "op" },
+    checks: (v) => [
+      { ...K.parts({ R1: v.R1, R2: v.R2, VS: { dc: parseValue(v.VS) } }, "The parts have the paper's values"), points: 3 },
+      { ...K.wiring([["VS", [["R1", 0], 0], true], ["R1", [["VS", 0], "OUT"]], ["R2", ["OUT", 0]]]), points: 3 },
+      { ...K.noOpenEnds(), points: 1 },
+      {
+        label: "R2 is not shorted out",
+        points: 2,
+        test: (ctx) => {
+          const a = ctx.node("R2", 0), b = ctx.node("R2", 1);
+          return { pass: a !== undefined && a !== b, detail: a === b ? "R2 has both ends on one node" : "" };
+        }
+      },
+      { ...K.op(), points: 1 },
+      {
+        ...K.sim("The divider works", (ctx) => {
+          const want = (parseValue(v.VS) * parseValue(v.R2)) / (parseValue(v.R1) + parseValue(v.R2));
+          const got = ctx.vn("OUT");
+          return { pass: near(got, want, want * 0.02), detail: `OUT is at ${formatEng(got, 4)} V` };
+        }),
+        points: 2
+      }
+    ]
+  },
+
+  {
+    id: "exam-final-1",
+    group: "exams",
+    code: "F1",
+    kind: "draw",
+    exam: true,
+    title: "Final 1 · Draw and sweep an RC filter",
+    summary: "Draw the filter from the question paper, sweep it, and report its corner frequency. Your values are on the paper and depend on your name.",
+    vary: { R1: ["1k", "2.2k", "4.7k", "10k"], C1: ["10n", "22n", "47n", "100n"] },
+    tasks: (v) => [
+      "Type your name under the sheet before you start: your values depend on it.",
+      `Draw a series RC circuit: VS (DC 0, AC 1) into R1 = ${v.R1}, then C1 = ${v.C1} to ground.`,
+      "Name the input node IN and the output, across the capacitor, OUT.",
+      "Set an AC sweep from 10 Hz to 1meg at 50 points per decade, probe OUT, and run it.",
+      "Enter the frequency where the output has fallen 3 dB, then press Submit exam answer once."
+    ],
+    circuit: blank("F1"),
+    useStudentAnalysis: true,
+    reference: { type: "ac", acPts: "50", acStart: "1", acStop: "10meg" },
+    questions: (v) => [{
+      id: "fc",
+      prompt: "The −3 dB frequency, in Hz",
+      rel: 0.05,
+      points: 4,
+      expect: () => 1 / (2 * Math.PI * parseValue(v.R1) * parseValue(v.C1))
+    }],
+    checks: (v) => [
+      { ...K.parts({ VS: { dc: 0, ac: 1, type: "V" }, R1: v.R1, C1: v.C1 }, "The parts have the paper's values"), points: 3 },
+      { ...K.wiring([["VS", ["IN", 0], true], ["R1", ["IN", "OUT"]], ["C1", ["OUT", 0]]]), points: 3 },
+      { ...K.noOpenEnds(), points: 1 },
+      { ...K.ac(10, 1e6, 50), points: 2 },
+      { ...K.probe("OUT", "OUT"), points: 1 },
+      {
+        ...K.sim("The filter rolls off from its corner", (ctx) => {
+          const want = 1 / (2 * Math.PI * parseValue(v.R1) * parseValue(v.C1));
+          const fc = corners(ctx.nodeTrace("OUT"), ctx.result?.sweep?.values).hi;
+          return { pass: near(fc, want, want * 0.08), detail: isFinite(fc) ? `the corner is at ${formatEng(fc, 3)} Hz` : "no −3 dB point in the sweep" };
+        }),
+        points: 2
+      }
+    ]
+  }
+];
 
 export const LAB_GROUPS = [
   { id: "explore", title: "Explorations" },
@@ -3287,17 +3490,19 @@ export const LAB_GROUPS = [
   { id: "e101-11", title: "ELEC 101 · Lab 11 — Digital circuits" },
   { id: "e101-12", title: "ELEC 101 · Lab 12 — Transistor and op-amp amplifiers" },
   { id: "e101-13", title: "ELEC 101 · Lab 13 — Buses, multiplexers and counters" },
-  { id: "e101-14", title: "ELEC 101 · Lab 14 — Instrumentation and operational amplifiers" }
+  { id: "e101-14", title: "ELEC 101 · Lab 14 — Instrumentation and operational amplifiers" },
+  { id: "exams", title: "Exams" }
 ];
 
 export const LAB_KINDS = {
+  exam: "Exam — marked once",
   explore: "Investigate",
   fix: "Find and fix the errors",
   simulate: "Set up the simulation",
   draw: "Draw it yourself"
 };
 
-export const LABS = [...EXPLORATIONS, ...ELEC101].map((l) => ({ kind: "explore", ...l }));
+export const LABS = [...EXPLORATIONS, ...ELEC101, ...EXAMS].map((l) => ({ kind: "explore", ...l }));
 
 /* -------------------------------------------------------------- checking */
 
@@ -3308,8 +3513,9 @@ export const LABS = [...EXPLORATIONS, ...ELEC101].map((l) => ({ kind: "explore",
  * report, and the ones that need results say why they could not pass.
  * Returns { ok, results:[{label, pass, detail}], error, result }.
  */
-export async function runChecks(lab, store, onProgress) {
+export async function runChecks(lab, store, onProgress, variant = null) {
   const state = store.state;
+  const vars = variant || variantFor(lab, state.titleBlock?.name);
   const analysis = lab.useStudentAnalysis
     ? state.analysis
     : { ...state.analysis, paramOn: false, ...(lab.analysis || {}) };
@@ -3329,7 +3535,8 @@ export async function runChecks(lab, store, onProgress) {
   }
 
   const ctx = makeContext(state, result, ref || result);
-  const checks = [...lab.checks, ...(lab.questions || []).map(answerCheck)];
+  ctx.variant = vars;
+  const checks = [...labChecks(lab, vars), ...labQuestions(lab, vars).map(answerCheck)];
   const results = checks.map((chk) => {
     if (chk.sim && !result) {
       return { label: chk.label, pass: false, answer: false,
@@ -3343,7 +3550,8 @@ export async function runChecks(lab, store, onProgress) {
     }
   });
 
-  return { ok: !error && results.every((r) => r.pass), results, error, result };
+  const score = scoreOf(checks, results);
+  return { ok: !error && results.every((r) => r.pass), results, error, result, score, variant: vars, checks };
 }
 
 export function labById(id) {

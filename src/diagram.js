@@ -32,6 +32,15 @@ export function createDiagramWindow({ onStatus, onToggle }) {
   const win = $("diagramWin");
   const head = $("diagramHead");
   const host = $("diagramHost");
+  // Held here rather than looked up each time: once the window has moved
+  // into a pop-out, it is in that window's document, not this one.
+  const el = {
+    title: $("diagramTitle"), caption: $("diagramCaption"), words: $("diagramWords"),
+    fit: $("btnDiagramFit"), close: $("btnDiagramClose"), pop: $("btnDiagramPop")
+  };
+  const home = { parent: win.parentNode, next: win.nextSibling };
+  let popup = null;               // the separate window, while popped out
+  const popped = () => !!popup && !popup.closed;
   const say = (m) => onStatus?.(m);
 
   const store = new Store({ persist: false });
@@ -51,7 +60,7 @@ export function createDiagramWindow({ onStatus, onToggle }) {
   /* ------------------------------------------------------------ place */
 
   function applyPlacement() {
-    if (docked()) return;
+    if (docked() || popped()) return;
     const r = prefs.rect;
     if (!r) return;
     const w = Math.min(r.w, window.innerWidth - 16);
@@ -67,7 +76,7 @@ export function createDiagramWindow({ onStatus, onToggle }) {
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
   function remember() {
-    if (docked()) return;
+    if (docked() || popped()) return;
     const b = win.getBoundingClientRect();
     prefs.rect = { x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) };
     writePrefs(prefs);
@@ -84,7 +93,7 @@ export function createDiagramWindow({ onStatus, onToggle }) {
 
   let drag = null;
   head.addEventListener("pointerdown", (evt) => {
-    if (evt.button !== 0 || evt.target.closest("button") || docked()) return;
+    if (evt.button !== 0 || evt.target.closest("button") || docked() || popped()) return;
     const b = win.getBoundingClientRect();
     drag = { dx: evt.clientX - b.left, dy: evt.clientY - b.top };
     head.setPointerCapture(evt.pointerId);
@@ -108,7 +117,7 @@ export function createDiagramWindow({ onStatus, onToggle }) {
   head.addEventListener("keydown", (evt) => {
     const step = evt.shiftKey ? STEP * 4 : STEP;
     const moves = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
-    if (moves[evt.key] && !docked()) {
+    if (moves[evt.key] && !docked() && !popped()) {
       evt.preventDefault();
       evt.stopPropagation();
       moveBy(...moves[evt.key]);
@@ -117,7 +126,13 @@ export function createDiagramWindow({ onStatus, onToggle }) {
 
   // Keys inside the window belong to it, not to the sheet's shortcuts.
   win.addEventListener("keydown", (evt) => {
-    if (evt.key === "Escape") { evt.preventDefault(); close(); $("btnDiagram")?.focus(); }
+    if (evt.key === "Escape") {
+      evt.preventDefault();
+      // In its own window Escape brings it home; in the page it closes it.
+      if (popped()) { putBack(); return; }
+      close();
+      $("btnDiagram")?.focus();
+    }
     evt.stopPropagation();
   });
 
@@ -131,13 +146,67 @@ export function createDiagramWindow({ onStatus, onToggle }) {
 
   window.addEventListener("resize", () => { if (!win.hidden) applyPlacement(); });
 
-  $("btnDiagramFit").addEventListener("click", () => { canvas.fit(); say("Diagram fitted."); });
-  $("btnDiagramClose").addEventListener("click", () => close());
+  el.fit.addEventListener("click", () => { canvas.fit(); say("Diagram fitted."); });
+  el.close.addEventListener("click", () => close());
+  el.pop.addEventListener("click", () => (popped() ? putBack() : popOut()));
+
+  /**
+   * Move the diagram into a window of its own. A floating panel cannot leave
+   * the page, but a window can go to another monitor and fill it. The diagram
+   * itself moves, not a copy, so it still pans, zooms and follows the student
+   * from lab to lab.
+   */
+  function popOut() {
+    const w = window.open("", "qcircuits-diagram", "popup,width=760,height=580");
+    if (!w) {
+      say("The browser blocked the new window. Allow pop-ups for this site, then press Pop out again.");
+      return;
+    }
+    popup = w;
+    const doc = w.document;
+    // The diagram is drawn with the page's styles, so they go with it.
+    doc.head.replaceChildren(...[...document.querySelectorAll('link[rel="stylesheet"], style')]
+      .map((n) => n.cloneNode(true)));
+    // After the head is replaced, or the title goes with it.
+    doc.title = lab ? `Reference: ${lab.title}` : "Q Circuits — reference diagram";
+    doc.documentElement.dataset.theme = document.documentElement.dataset.theme || "";
+    doc.body.className = "diagram-popup";
+    doc.body.replaceChildren(doc.adoptNode(win));
+    win.classList.add("is-popped");
+    win.hidden = false;
+    el.pop.textContent = "Put back";
+    el.pop.title = "Return the diagram to the page";
+    w.addEventListener("pagehide", () => putBack(), { once: true });
+    w.addEventListener("resize", () => canvas.fit());
+    // Styles may still be loading into the new window; fit once they settle.
+    setTimeout(() => canvas.fit(), 60);
+    w.focus();
+    onToggle?.(true);
+    say("The diagram is in its own window. Drag it to your other monitor.");
+  }
+
+  /** Bring the diagram back into the page, and close its window. */
+  function putBack() {
+    if (!popup) return;
+    const w = popup;
+    popup = null;
+    win.classList.remove("is-popped");
+    home.parent.insertBefore(document.adoptNode(win), home.next);
+    el.pop.textContent = "Pop out";
+    el.pop.title = "Open the diagram in its own window, to move to another monitor";
+    if (!w.closed) w.close();
+    applyPlacement();
+    canvas.fit();
+    say("The diagram is back on the page.");
+  }
+
+  // Closing the page closes the diagram's window with it.
+  window.addEventListener("pagehide", () => { if (popped()) popup.close(); });
 
   /* ----------------------------------------------------------- content */
 
   function describe() {
-    const list = $("diagramWords");
+    const list = el.words;
     list.replaceChildren();
     const { comps, wires, probes } = store.state;
     const net = buildNodes(comps, wires);
@@ -177,8 +246,9 @@ export function createDiagramWindow({ onStatus, onToggle }) {
     if (!lab) return;
     const circuit = diagramFor(lab);
     store.loadCircuit({ ...circuit, title: lab.title, notes: [] });
-    $("diagramTitle").textContent = `Reference: ${lab.title}`;
-    $("diagramCaption").textContent = DIAGRAM_CAPTIONS[lab.kind] || "";
+    el.title.textContent = `Reference: ${lab.title}`;
+    if (popup && !popup.closed) popup.document.title = `Reference: ${lab.title}`;
+    el.caption.textContent = DIAGRAM_CAPTIONS[lab.kind] || "";
     describe();
     canvas.fit();
   }
@@ -197,6 +267,7 @@ export function createDiagramWindow({ onStatus, onToggle }) {
   }
 
   function close() {
+    if (popped()) putBack();
     win.hidden = true;
     prefs.open = false;
     writePrefs(prefs);
@@ -208,7 +279,13 @@ export function createDiagramWindow({ onStatus, onToggle }) {
     /** Point the window at a lab, or at nothing. Opens it if it was left open. */
     setLab(next) {
       lab = next;
-      if (!lab) { win.hidden = true; onToggle?.(false); return; }
+      if (!lab) {
+        if (popped()) putBack();
+        win.hidden = true;
+        onToggle?.(false);
+        return;
+      }
+      if (popped()) { load(); return; }
       if (prefs.open) {
         win.hidden = false;
         applyPlacement();
@@ -221,6 +298,8 @@ export function createDiagramWindow({ onStatus, onToggle }) {
     open, close,
     toggle() { if (win.hidden) open(); else close(); },
     isOpen: () => !win.hidden,
+    isPopped: popped,
+    popOut, putBack,
     store, canvas
   };
 }
