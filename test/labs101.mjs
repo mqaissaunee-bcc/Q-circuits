@@ -1660,6 +1660,75 @@ check("leaving the lab closes the diagram's window", pop2.isClosed(), `closed: $
 const remembered = await page.evaluate(() => JSON.parse(localStorage.getItem("q-circuits-diagram-v1") || "{}").popup || null);
 check("the pop-out's size is remembered for next time", !!remembered && remembered.w > 200 && remembered.h > 200, JSON.stringify(remembered));
 
+console.log("\n— checking my work —");
+const marking = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  L.freshLabs();
+  const sel = document.getElementById("labSelect");
+  sel.value = "e101-07a"; sel.dispatchEvent(new Event("change"));
+  S.loadCircuit({ ...L.labs.diagramFor(L.labs.labById("e101-07a")), title: "LAB 07A" });
+  S.edit((s) => {
+    Object.assign(s.analysis, { type: "dc", dcSrc: "VS", dcStart: "-12", dcStop: "12", dcStep: "0.1" });
+    s.answers = { vhi: "9", vlo: "-9" };
+  }, "t");
+  document.getElementById("btnCheck").click();
+  // whatever else happens, the student sees something at once
+  const immediate = document.querySelector("#checkResults .checking")?.textContent || "";
+  await new Promise((r) => setTimeout(r, 6000));
+  const list = [...document.querySelectorAll("#checkResults .check-list li")];
+  const host = document.getElementById("checkResults");
+  const box = host.getBoundingClientRect();
+  return {
+    height: Math.round(box.height),
+    visible: !host.closest("[hidden]") && getComputedStyle(host).display !== "none" && box.height > 0,
+    immediate,
+    items: list.length,
+    ticks: list.filter((li) => li.classList.contains("pass")).length,
+    stillChecking: !!document.querySelector("#checkResults .checking"),
+    buttonBack: !document.getElementById("btnCheck").disabled,
+    passed: (document.querySelector(".lab-progress")?.hidden === false)
+  };
+});
+check("pressing Check my work says so straight away", /Checking your work/.test(marking.immediate), marking.immediate);
+check("every step comes back with a tick or a cross", marking.items > 5 && marking.ticks === marking.items,
+  `${marking.ticks} ticks of ${marking.items} checks`);
+// The list was once rendered into a container the lab view hid, so being in
+// the DOM is not enough: it has to be on screen.
+check("and the list is actually visible, not in a hidden container",
+  marking.height > 100 && marking.visible, `${marking.height} px tall, visible: ${marking.visible}`);
+check("the working line is replaced by the results", !marking.stillChecking);
+check("the button comes back afterwards", marking.buttonBack);
+check("a lab that passes is marked as passed", marking.passed);
+
+// Pressing it again on a lab already passed still lists the steps.
+const again = await page.evaluate(async () => {
+  document.getElementById("btnCheck").click();
+  await new Promise((r) => setTimeout(r, 6000));
+  return document.querySelectorAll("#checkResults .check-list li").length;
+});
+check("checking again on a passed lab still shows the list", again > 5, `${again} checks`);
+
+// If the marking throws, the student is told rather than left waiting.
+const broken = await page.evaluate(async () => {
+  const L = window.__spiceLab;
+  const real = L.labs.runChecks;
+  const lab = L.labs.labById("e101-07a");
+  const originalChecks = lab.checks;
+  lab.checks = () => { throw new Error("something went wrong"); };
+  document.getElementById("btnCheck").click();
+  await new Promise((r) => setTimeout(r, 4000));
+  const message = document.querySelector("#checkResults .check-failed")?.textContent || "";
+  lab.checks = originalChecks;
+  void real;
+  return { message, buttonBack: !document.getElementById("btnCheck").disabled };
+});
+check("a marking that fails says so and gives the button back",
+  /could not be run/.test(broken.message) && broken.buttonBack, JSON.stringify(broken));
+
+const stamp = await page.evaluate(() => ({ shown: document.getElementById("buildStamp")?.textContent, api: window.__spiceLab.build }));
+check("the page shows which build it is, for telling copies apart",
+  !!stamp.shown && stamp.shown === stamp.api && /\d{4}-\d{2}-\d{2}/.test(stamp.shown), JSON.stringify(stamp));
+
 console.log("\n— exams —");
 
 const examBasics = await page.evaluate(() => {

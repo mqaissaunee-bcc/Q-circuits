@@ -161,6 +161,7 @@
                   title="Check the work and save one image to hand in: schematic, plot, readings and results">Save submission sheet</button>
           <button type="button" id="btnLabReset" class="ghost" hidden>Start over</button>
         </div>
+        <div id="checkResults"></div>
         <details class="exam-decode" id="examDecode">
           <summary>Mark a submitted answer sheet</summary>
           <p class="field-hint">Paste the result code from a student's exam sheet to see which checks passed. Full view only.</p>
@@ -170,8 +171,8 @@
           </div>
           <div class="btn-row">
             <button type="button" id="btnDecode" class="ghost">Decode</button>
-        </div>
-        <div id="checkResults"></div>
+          </div>
+        </details>
       </div>
     </section>
 
@@ -493,6 +494,7 @@
     Circuits are simulated in this tab and never uploaded.
     Q Circuits is built for Engineering &amp; Technology, Brookdale Community College.
   </p>
+  <p class="build-stamp">Build <span id="buildStamp">dev</span></p>
 </footer>
 
 <script type="module" src="./src/main.js"></script>

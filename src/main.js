@@ -57,6 +57,8 @@ $("btnDiagram").addEventListener("click", () => diagram.toggle());
 const scope = createScope({ host: $("scopeHost"), measureHost: $("measureHost"), onStatus: say });
 
 let currentLab = null;
+/** Stamped at build time, so a student can read back which copy they have. */
+const BUILD_STAMP = typeof __BUILD_STAMP__ === "string" ? __BUILD_STAMP__ : "dev";
 // Which view is on: the labs' parts and settings, or everything.
 const VIEW_KEY = "q-circuits-view-v1";
 const LAB_PART_SET = new Set(LAB_PARTS);
@@ -1067,6 +1069,8 @@ labSelect.addEventListener("change", () => {
   }
 
   openLab(lab);
+  const stamp = $("buildStamp");
+  if (stamp) stamp.textContent = BUILD_STAMP;
   syncAnalysisInputs();
   syncBiasButton();
   canvas.setBias(null);
@@ -1217,6 +1221,7 @@ async function showExamScore(outcome) {
     labId: currentLab.id, name: titleBlockState().name, date, results: outcome.results
   });
 
+  host.replaceChildren();
   const box = document.createElement("div");
   box.className = "exam-result";
   const score = document.createElement("p");
@@ -1269,6 +1274,14 @@ async function markLab() {
   host.replaceChildren();
   $("runError").replaceChildren();
 
+  // Something visible straight away: the first run of a lab downloads the
+  // engine, which can take a while on a slow connection, and silence in the
+  // meantime reads as a button that did nothing.
+  const working = document.createElement("p");
+  working.className = "checking";
+  working.textContent = currentLab.exam ? "Marking your answer…" : "Checking your work…";
+  host.appendChild(working);
+
   if (currentLab.exam && !titleBlockState().name) {
     $("titleBlockBox").open = true;
     $("tbName").focus();
@@ -1283,11 +1296,25 @@ async function markLab() {
   // Answers typed in the last moment may still be in the debounce.
   document.activeElement?.blur?.();
   await new Promise((r) => setTimeout(r, 200));
-  const outcome = await runChecks(currentLab, store, (m) => { note.textContent = m; say(m); });
+  let outcome;
+  try {
+    outcome = await runChecks(currentLab, store, (m) => { note.textContent = m; say(m); });
+  } catch (e) {
+    // Never leave the student with a dead button and nothing on screen.
+    host.replaceChildren();
+    const failed = document.createElement("p");
+    failed.className = "check-failed";
+    failed.textContent = `The check could not be run: ${e.message}. Try again, and reload the page if it keeps happening.`;
+    host.appendChild(failed);
+    say(failed.textContent);
+    return null;
+  } finally {
+    running = false;
+    $("btnCheck").disabled = false;
+    $("btnSubmit").disabled = false;
+  }
 
-  running = false;
-  $("btnCheck").disabled = false;
-  $("btnSubmit").disabled = false;
+  host.replaceChildren();
 
   if (outcome.error) showRunError(outcome.error, $("netOut").value);
   if (outcome.result) {
@@ -1322,6 +1349,7 @@ async function markLab() {
     ul.appendChild(li);
   });
   host.appendChild(ul);
+  host.scrollIntoView({ block: "nearest" });
 
   const passed = outcome.results.filter((r) => r.pass).length;
   store.saveLabWork(currentLab.id);
@@ -1685,4 +1713,5 @@ window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, 
     try { localStorage.removeItem("q-circuits-labwork-v1"); } catch { /* storage blocked */ }
   },
   currentLab: () => currentLab,
+  build: BUILD_STAMP,
   simulate, diagram, buildSubmissionSheet, labDiagramSource, parts: { shapeOf, PARTS }, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor, variantFor, encodeOutcome, decodeOutcome, scoreOf } };

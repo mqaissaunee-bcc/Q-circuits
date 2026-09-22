@@ -4,6 +4,8 @@ import { defineConfig } from "vite";
 // It is pulled in with a dynamic import() from src/engine.js so it lands in its
 // own chunk and the app shell paints before the engine is fetched.
 export default defineConfig({
+  // Stamped into the page so a student can read back which copy they have.
+  define: { __BUILD_STAMP__: JSON.stringify(new Date().toISOString().slice(0, 16).replace("T", " ")) },
   base: "./",
   build: {
     target: "es2022",

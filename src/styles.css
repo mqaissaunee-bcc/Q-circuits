@@ -729,3 +729,8 @@ body.diagram-popup { margin: 0; background: var(--panel); }
 
 .diagram-hint { margin: 0; padding: 0 var(--sp-3) var(--sp-1); font-size: .72rem; color: var(--ink-soft); }
 .diagram-head #btnDiagramZoomIn, .diagram-head #btnDiagramZoomOut { min-width: 36px; font-weight: 700; }
+
+/* marking feedback */
+.checking { margin: var(--sp-2) 0 0; color: var(--ink-soft); }
+.check-failed { margin: var(--sp-2) 0 0; color: var(--danger); }
+.build-stamp { margin: var(--sp-1) 0 0; font-size: .72rem; color: var(--ink-soft); font-family: var(--mono); }
