@@ -411,6 +411,18 @@ floating window, drawn by the same renderer as the sheet but read-only:
 - *The circuit in words* underneath lists every part, its value and the
   nodes it joins, as the text equivalent of the drawing.
 
+**Zooming the diagram.** It is a viewer, with nothing to scroll, so a plain
+scroll or a pinch zooms it; a double-click zooms in on the spot
+(shift-double-click zooms out); the title bar has − and + buttons; and with
+the window focused, + and − zoom and 0 fits. The viewer lets you in closer
+than the editing sheet does.
+
+**Pop out** opens at 85% of the screen, and after that at whatever size and
+place the student last left it. The browser may still move a new window back
+to the monitor the page is on; the size is always remembered. The popped-out
+diagram fills its window however the in-page panel was sized: that panel keeps
+its dragged size as inline styles, which the pop-out overrides.
+
 **Pop out** moves the diagram into a browser window of its own, which can be
 dragged to a second monitor and maximised there. The diagram itself moves,
 not a copy, so it keeps panning, zooming and fitting, and it follows the

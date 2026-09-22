@@ -711,11 +711,21 @@ dl.shortcuts kbd {
 
 /* the reference diagram in a window of its own */
 body.diagram-popup { margin: 0; background: var(--panel); }
+/*
+ * !important because the in-page panel carries the size and place the
+ * student last dragged it to as inline styles; without it the pop-out keeps
+ * that small size inside its big window.
+ */
 .diagram-win.is-popped {
-  position: static; inset: auto; width: 100vw; height: 100vh;
+  position: static !important; inset: auto !important;
+  left: auto !important; top: auto !important; right: auto !important; bottom: auto !important;
+  width: 100vw !important; height: 100vh !important;
   max-width: none; max-height: none; border: none; border-radius: 0;
   box-shadow: none; resize: none;
 }
 .diagram-win.is-popped .diagram-head { cursor: default; }
 /* A phone has no second monitor, and a pop-out there is just another tab. */
 @media (max-width: 760px) { #btnDiagramPop { display: none; } }
+
+.diagram-hint { margin: 0; padding: 0 var(--sp-3) var(--sp-1); font-size: .72rem; color: var(--ink-soft); }
+.diagram-head #btnDiagramZoomIn, .diagram-head #btnDiagramZoomOut { min-width: 36px; font-weight: 700; }

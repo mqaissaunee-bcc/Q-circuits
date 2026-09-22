@@ -36,7 +36,8 @@ export function createDiagramWindow({ onStatus, onToggle }) {
   // into a pop-out, it is in that window's document, not this one.
   const el = {
     title: $("diagramTitle"), caption: $("diagramCaption"), words: $("diagramWords"),
-    fit: $("btnDiagramFit"), close: $("btnDiagramClose"), pop: $("btnDiagramPop")
+    fit: $("btnDiagramFit"), close: $("btnDiagramClose"), pop: $("btnDiagramPop"),
+    zoomIn: $("btnDiagramZoomIn"), zoomOut: $("btnDiagramZoomOut")
   };
   const home = { parent: win.parentNode, next: win.nextSibling };
   let popup = null;               // the separate window, while popped out
@@ -126,6 +127,10 @@ export function createDiagramWindow({ onStatus, onToggle }) {
 
   // Keys inside the window belong to it, not to the sheet's shortcuts.
   win.addEventListener("keydown", (evt) => {
+    if (evt.target.closest("input, textarea")) return;
+    if (evt.key === "+" || evt.key === "=") { evt.preventDefault(); canvas.zoomIn(); evt.stopPropagation(); return; }
+    if (evt.key === "-" || evt.key === "_") { evt.preventDefault(); canvas.zoomOut(); evt.stopPropagation(); return; }
+    if (evt.key === "0") { evt.preventDefault(); canvas.fit(); evt.stopPropagation(); return; }
     if (evt.key === "Escape") {
       evt.preventDefault();
       // In its own window Escape brings it home; in the page it closes it.
@@ -147,6 +152,8 @@ export function createDiagramWindow({ onStatus, onToggle }) {
   window.addEventListener("resize", () => { if (!win.hidden) applyPlacement(); });
 
   el.fit.addEventListener("click", () => { canvas.fit(); say("Diagram fitted."); });
+  el.zoomIn.addEventListener("click", () => canvas.zoomIn());
+  el.zoomOut.addEventListener("click", () => canvas.zoomOut());
   el.close.addEventListener("click", () => close());
   el.pop.addEventListener("click", () => (popped() ? putBack() : popOut()));
 
@@ -157,7 +164,13 @@ export function createDiagramWindow({ onStatus, onToggle }) {
    * from lab to lab.
    */
   function popOut() {
-    const w = window.open("", "qcircuits-diagram", "popup,width=760,height=580");
+    // Big by default, since a diagram is for reading; after that, wherever
+    // and however large the student last left it.
+    const last = prefs.popup || {};
+    const width = last.w || Math.round(Math.min(1600, (screen.availWidth || 1280) * 0.85));
+    const height = last.h || Math.round(Math.min(1100, (screen.availHeight || 800) * 0.85));
+    const place = last.x !== undefined ? `,left=${last.x},top=${last.y}` : "";
+    const w = window.open("", "qcircuits-diagram", `popup,width=${width},height=${height}${place}`);
     if (!w) {
       say("The browser blocked the new window. Allow pop-ups for this site, then press Pop out again.");
       return;
@@ -177,7 +190,7 @@ export function createDiagramWindow({ onStatus, onToggle }) {
     el.pop.textContent = "Put back";
     el.pop.title = "Return the diagram to the page";
     w.addEventListener("pagehide", () => putBack(), { once: true });
-    w.addEventListener("resize", () => canvas.fit());
+    w.addEventListener("resize", () => { canvas.fit(); rememberPopup(w); });
     // Styles may still be loading into the new window; fit once they settle.
     setTimeout(() => canvas.fit(), 60);
     w.focus();
@@ -186,9 +199,20 @@ export function createDiagramWindow({ onStatus, onToggle }) {
   }
 
   /** Bring the diagram back into the page, and close its window. */
+  /** Note where the pop-out is, so the next one opens in the same place. */
+  function rememberPopup(w) {
+    try {
+      if (w && !w.closed && w.outerWidth > 200) {
+        prefs.popup = { w: w.outerWidth, h: w.outerHeight, x: w.screenX, y: w.screenY };
+        writePrefs(prefs);
+      }
+    } catch { /* the window has gone */ }
+  }
+
   function putBack() {
     if (!popup) return;
     const w = popup;
+    rememberPopup(w);
     popup = null;
     win.classList.remove("is-popped");
     home.parent.insertBefore(document.adoptNode(win), home.next);

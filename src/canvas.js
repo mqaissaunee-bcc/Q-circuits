@@ -77,7 +77,8 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
   }
 
   function zoomBy(factor, focus) {
-    const nw = Math.min(SHEET_W * 2.5, Math.max(260, view.w * factor));
+    // A diagram viewer may zoom in closer than the editing sheet does.
+    const nw = Math.min(SHEET_W * 2.5, Math.max(readOnly ? 120 : 260, view.w * factor));
     const scale = nw / view.w;
     const f = focus || { x: view.x + view.w / 2, y: view.y + view.h / 2 };
     view.x = f.x - (f.x - view.x) * scale;
@@ -1151,11 +1152,21 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
     // pinch as a wheel event with ctrlKey set, and Ctrl or Command plus wheel
     // is the equivalent with a mouse — those are the only ones that zoom.
     // Swallowing every wheel event trapped the page behind the sheet.
-    if (!(evt.ctrlKey || evt.metaKey)) return;
+    // The read-only diagram is a viewer with nothing to scroll, so a plain
+    // scroll zooms it, the way a picture viewer's does.
+    if (!(evt.ctrlKey || evt.metaKey || readOnly)) return;
     if (viewLocked) return;
     evt.preventDefault();
     zoomBy(evt.deltaY > 0 ? 1.12 : 0.89, toSheet(evt));
   }, { passive: false });
+
+  // In the viewer a double-click zooms in on the spot.
+  if (readOnly) {
+    svg.addEventListener("dblclick", (evt) => {
+      evt.preventDefault();
+      zoomBy(evt.shiftKey ? 2 : 0.5, toSheet(evt));
+    });
+  }
 
   /* -------------------------------------------------------------- public */
 
@@ -1200,6 +1211,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
 
     clearCaret() { caret = null; render(); },
     zoomIn: () => zoomBy(0.8),
+    zoomOut: () => zoomBy(1.25),
     zoomOut: () => zoomBy(1.25),
     getTool: () => tool,
     setTool(t) {

@@ -471,11 +471,14 @@
     <span class="head-actions">
       <button type="button" id="btnDiagramPop" class="ghost"
               title="Open the diagram in its own window, to move to another monitor">Pop out</button>
-      <button type="button" id="btnDiagramFit" class="ghost">Fit</button>
+      <button type="button" id="btnDiagramZoomOut" class="ghost" aria-label="Zoom the diagram out" title="Zoom out (−)">−</button>
+      <button type="button" id="btnDiagramZoomIn" class="ghost" aria-label="Zoom the diagram in" title="Zoom in (+)">+</button>
+      <button type="button" id="btnDiagramFit" class="ghost" title="Show the whole circuit (0)">Fit</button>
       <button type="button" id="btnDiagramClose" class="ghost" aria-label="Close the reference diagram">Close</button>
     </span>
   </div>
   <p class="diagram-caption" id="diagramCaption"></p>
+  <p class="diagram-hint">Scroll or pinch to zoom, drag to pan, double-click to zoom in on a spot.</p>
   <div class="diagram-host" id="diagramHost"></div>
   <details class="diagram-words">
     <summary>The circuit in words</summary>

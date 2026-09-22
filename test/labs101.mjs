@@ -1571,7 +1571,9 @@ await page.evaluate(() => {
 });
 const [pop] = await Promise.all([page.waitForEvent("popup"), page.click("#btnDiagramPop")]);
 await pop.waitForLoadState();
-await pop.waitForTimeout(200);
+// A new window can open small and then grow to the size it asked for.
+await pop.waitForFunction(() => innerWidth > 600, null, { timeout: 5000 }).catch(() => {});
+await pop.waitForTimeout(150);
 const inPop = await pop.evaluate(() => ({
   win: !!document.getElementById("diagramWin"),
   parts: document.querySelectorAll("#diagramWin .part").length,
@@ -1582,7 +1584,9 @@ const inPop = await pop.evaluate(() => ({
 }));
 const inPage = await page.evaluate(() => !!document.getElementById("diagramWin"));
 check("Pop out moves the diagram into a window of its own", inPop.win && !inPage && inPop.parts > 3, JSON.stringify(inPop));
-check("it fills that window, with the page's styles", inPop.styled === "static" && inPop.width > 600, `${inPop.styled}, ${Math.round(inPop.width)} px`);
+// This circuit's panel was dragged and resized earlier in the run, which is
+// what left it small in its big window before the fix.
+check("it fills that window, however the in-page panel was sized", inPop.styled === "static" && inPop.width > 600, `${inPop.styled}, ${Math.round(inPop.width)} px`);
 check("the window is titled with the lab", /6A/.test(inPop.title), inPop.title);
 
 const followed = await page.evaluate(() => {
@@ -1604,6 +1608,37 @@ const fitWorks = await pop.evaluate(() => {
 });
 check("pan, zoom and Fit still work in the popped-out window", !!fitWorks, fitWorks);
 
+const popSize = await pop.evaluate(() => ({ w: window.outerWidth || innerWidth, avail: screen.availWidth }));
+check("the pop-out opens large, not as a small panel", popSize.w >= Math.min(1200, popSize.avail * 0.8), JSON.stringify(popSize));
+
+const zooms = await pop.evaluate(async () => {
+  const svg = document.querySelector("#diagramHost svg");
+  const width = () => Number(svg.getAttribute("viewBox").split(" ")[2]);
+  document.getElementById("btnDiagramFit").click();
+  const fitted = width();
+  document.getElementById("btnDiagramZoomIn").click();
+  const plus = width();
+  document.getElementById("btnDiagramZoomOut").click();
+  const minus = width();
+  document.getElementById("btnDiagramFit").click();
+  const r = svg.getBoundingClientRect();
+  svg.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true }));
+  const wheel = width();
+  document.getElementById("btnDiagramFit").click();
+  svg.dispatchEvent(new MouseEvent("dblclick", { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true }));
+  const dbl = width();
+  document.getElementById("btnDiagramFit").click();
+  document.getElementById("diagramWin").dispatchEvent(new KeyboardEvent("keydown", { key: "+", bubbles: true }));
+  const key = width();
+  return { fitted, plus, minus, wheel, dbl, key };
+});
+check("+ and − zoom the diagram in and out", zooms.plus < zooms.fitted && zooms.minus > zooms.plus, JSON.stringify(zooms));
+check("a plain scroll zooms it, as in a picture viewer", zooms.wheel < zooms.fitted, `${zooms.fitted} → ${zooms.wheel}`);
+check("a double-click zooms in on the spot", zooms.dbl < zooms.fitted * 0.6, `${zooms.fitted} → ${zooms.dbl}`);
+check("the + key zooms too", zooms.key < zooms.fitted, `${zooms.fitted} → ${zooms.key}`);
+
+await pop.setViewportSize({ width: 1000, height: 700 });
+await pop.waitForTimeout(150);
 await pop.close();
 await page.waitForTimeout(200);
 const home = await page.evaluate(() => ({
@@ -1622,6 +1657,8 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(200);
 check("leaving the lab closes the diagram's window", pop2.isClosed(), `closed: ${pop2.isClosed()}`);
+const remembered = await page.evaluate(() => JSON.parse(localStorage.getItem("q-circuits-diagram-v1") || "{}").popup || null);
+check("the pop-out's size is remembered for next time", !!remembered && remembered.w > 200 && remembered.h > 200, JSON.stringify(remembered));
 
 console.log("\n— exams —");
 
