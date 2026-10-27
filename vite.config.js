@@ -4,8 +4,19 @@ import { defineConfig } from "vite";
 // It is pulled in with a dynamic import() from src/engine.js so it lands in its
 // own chunk and the app shell paints before the engine is fetched.
 export default defineConfig({
-  // Stamped into the page so a student can read back which copy they have.
-  define: { __BUILD_STAMP__: JSON.stringify(new Date().toISOString().slice(0, 16).replace("T", " ")) },
+  /*
+   * The build stamp goes into the HTML itself rather than through `define`.
+   * Whether a bare identifier is substituted inside a `typeof` check varies
+   * between bundler versions, and a stamp that silently reads "dev" is worse
+   * than none: it is the one thing that tells two deploys apart.
+   */
+  plugins: [{
+    name: "build-stamp",
+    transformIndexHtml(html) {
+      const stamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+      return html.replace('id="buildStamp">dev<', `id="buildStamp">${stamp} UTC<`);
+    }
+  }],
   base: "./",
   build: {
     target: "es2022",

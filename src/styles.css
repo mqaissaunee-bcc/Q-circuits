@@ -743,3 +743,7 @@ body.diagram-popup { margin: 0; background: var(--panel); }
 .pack-errors { margin-top: var(--sp-2); padding: var(--sp-2); border-left: 3px solid var(--danger); background: var(--danger-soft, transparent); }
 .pack-errors ul { margin: var(--sp-1) 0 0; padding-left: var(--sp-3); }
 #marksTable { margin-top: var(--sp-2); }
+
+/* the result code a student hands in with the sheet */
+.exam-code-row { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); flex-wrap: wrap; }
+.exam-code { flex: 1 1 320px; min-width: 0; font-family: var(--mono); font-size: .8rem; }

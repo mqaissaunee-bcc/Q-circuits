@@ -1816,6 +1816,32 @@ if (link) {
   await fresh.close();
 }
 
+// A student has to hand the code in as text, not as a picture of one.
+const handIn = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  const sel = document.getElementById("labSelect");
+  sel.value = "pack-test-midterm-t1"; sel.dispatchEvent(new Event("change"));
+  S.edit((s) => { s.titleBlock = { ...s.titleBlock, name: "Ada Lovelace" }; }, "t");
+  document.getElementById("btnCheck").click();
+  await new Promise((r) => setTimeout(r, 6000));
+  const field = document.querySelector("#checkResults .exam-code");
+  return {
+    score: document.querySelector("#checkResults .exam-score")?.textContent || "",
+    code: field?.value || "",
+    readable: !!field && field.readOnly,
+    copy: !!document.querySelector("#checkResults .exam-code-row button")
+  };
+});
+check("submitting an exam shows the score", /marks/.test(handIn.score), handIn.score);
+check("and the result code on screen, to copy and hand in",
+  handIn.code.length > 20 && handIn.readable && handIn.copy, JSON.stringify({ ...handIn, code: handIn.code.slice(0, 24) }));
+const decodesBack = await page.evaluate((code) => {
+  const d = window.__spiceLab.labs.decodeOutcome(code);
+  return d ? { name: d.name, lab: d.labId } : null;
+}, handIn.code);
+check("the code a student copies marks back to them",
+  decodesBack && decodesBack.name === "Ada Lovelace" && /test-midterm/.test(decodesBack.lab), JSON.stringify(decodesBack));
+
 // The real midterm pack: every item must be solvable for full marks.
 const midterm = JSON.parse(await (await import("fs/promises")).readFile(new URL("../examples/elec101-midterm.json", import.meta.url), "utf8"));
 const midtermSat = await page.evaluate(async (packText) => {
@@ -2046,8 +2072,11 @@ check("a marking that fails says so and gives the button back",
   /could not be run/.test(broken.message) && broken.buttonBack, JSON.stringify(broken));
 
 const stamp = await page.evaluate(() => ({ shown: document.getElementById("buildStamp")?.textContent, api: window.__spiceLab.build }));
+// A stamp that silently reads "dev" is worse than none: it is what tells a
+// stale deploy from a fresh one.
 check("the page shows which build it is, for telling copies apart",
-  !!stamp.shown && stamp.shown === stamp.api && /\d{4}-\d{2}-\d{2}/.test(stamp.shown), JSON.stringify(stamp));
+  !!stamp.shown && stamp.shown === stamp.api && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC$/.test(stamp.shown), JSON.stringify(stamp));
+check("the stamp is a real date, never the word dev", !/dev/i.test(stamp.shown), stamp.shown);
 
 console.log("\n— exams —");
 

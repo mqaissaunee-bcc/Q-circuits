@@ -59,8 +59,11 @@ $("btnDiagram").addEventListener("click", () => diagram.toggle());
 const scope = createScope({ host: $("scopeHost"), measureHost: $("measureHost"), onStatus: say });
 
 let currentLab = null;
-/** Stamped at build time, so a student can read back which copy they have. */
-const BUILD_STAMP = typeof __BUILD_STAMP__ === "string" ? __BUILD_STAMP__ : "dev";
+/**
+ * Stamped into the page at build time (see vite.config.js), and read back
+ * from it here, so there is one source of truth and nothing to go stale.
+ */
+const BUILD_STAMP = document.getElementById("buildStamp")?.textContent?.trim() || "dev";
 // Which view is on: the labs' parts and settings, or everything.
 const VIEW_KEY = "q-circuits-view-v1";
 const LAB_PART_SET = new Set(LAB_PARTS);
@@ -1071,8 +1074,6 @@ labSelect.addEventListener("change", () => {
   }
 
   openLab(lab);
-  const stamp = $("buildStamp");
-  if (stamp) stamp.textContent = BUILD_STAMP;
   syncAnalysisInputs();
   syncBiasButton();
   canvas.setBias(null);
@@ -1446,9 +1447,35 @@ async function showExamScore(outcome) {
   score.textContent = `${earned} of ${total} marks (${Math.round(percent)}%)`;
   const note = document.createElement("p");
   note.textContent = outcome.error
-    ? "Your circuit did not simulate, so the marks that need a run were lost. The sheet below is still your answer."
-    : "Save the sheet and hand it in. It carries your circuit, your readings and this result.";
+    ? "Your circuit did not simulate, so the marks that need a run were lost. The sheet that just downloaded is still your answer."
+    : "Your answer sheet has downloaded. Hand that in, and paste the result code below with it.";
   box.append(score, note);
+
+  // The code also goes on the sheet, but an instructor marks from text, not
+  // from a picture: this is the copy a student can paste into the hand-in.
+  const codeRow = document.createElement("div");
+  codeRow.className = "exam-code-row";
+  const codeBox = document.createElement("input");
+  codeBox.type = "text";
+  codeBox.readOnly = true;
+  codeBox.className = "exam-code";
+  codeBox.value = code;
+  codeBox.setAttribute("aria-label", "Your result code");
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "ghost";
+  copy.textContent = "Copy result code";
+  copy.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      say("Result code copied. Paste it with your answer sheet.");
+    } catch {
+      codeBox.select();
+      say("Copy was blocked. The code is selected — press Ctrl or Command C.");
+    }
+  });
+  codeRow.append(codeBox, copy);
+  box.appendChild(codeRow);
   host.appendChild(box);
 
   store.saveLabWork(currentLab.id);

@@ -713,6 +713,23 @@ would not stop a determined forgery.
 Two examples ship in `EXAMS` in `src/labs.js`: a fix-it midterm item and a
 draw-it final item. Both are worth copying for new ones.
 
+### What a student hands in
+
+Submitting an exam shows the score, downloads the answer sheet, and puts the
+**result code on screen with a copy button**. The code is on the sheet too,
+but marking is done from text, not from a picture of text: students paste the
+code into the hand-in alongside the PNG, and a class's worth goes into the
+instructor panel in one go.
+
+### Which build is this?
+
+The footer carries a build stamp, written into `index.html` by a plugin in
+`vite.config.js` and read back from the page. It goes through the HTML rather
+than a `define`, because whether a bare identifier is substituted inside a
+`typeof` check varies between bundler versions, and a stamp that quietly
+reads "dev" is worse than no stamp: this is the one thing that tells a stale
+deploy from a fresh one. The suite fails if it ever reads anything but a date.
+
 ### Marking a class
 
 *Instructor: exams* in the Lab panel (full view) takes result codes. One code
