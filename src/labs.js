@@ -3554,8 +3554,20 @@ export async function runChecks(lab, store, onProgress, variant = null) {
   return { ok: !error && results.every((r) => r.pass), results, error, result, score, variant: vars, checks };
 }
 
+/** Labs loaded from an exam pack, which sit beside the built-in ones. */
+let extraLabs = [];
+let extraGroups = [];
+
+export function setExtraLabs(labs, groups) {
+  extraLabs = labs || [];
+  extraGroups = groups || [];
+}
+
+export const allLabs = () => [...LABS, ...extraLabs];
+export const allGroups = () => [...LAB_GROUPS, ...extraGroups];
+
 export function labById(id) {
-  return LABS.find((l) => l.id === id) || null;
+  return allLabs().find((l) => l.id === id) || null;
 }
 
 export { PARTS, K, corners };

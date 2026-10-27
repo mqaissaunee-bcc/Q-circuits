@@ -1703,6 +1703,283 @@ const answered = await page.evaluate(async () => {
 check("an answer typed with a suffix, or with µ, is marked on its value",
   answered.marks.length === 2 && answered.marks.every(Boolean), JSON.stringify(answered));
 
+console.log("\n— exam packs and batch marking —");
+const packText = JSON.stringify({
+  id: "test-midterm", title: "Test Midterm",
+  items: [{
+    code: "T1", kind: "draw", title: "T1 · Divider",
+    vary: { VS: ["9", "12"], R1: ["1k", "2.2k"], R2: ["3.3k", "4.7k"] },
+    tasks: ["Draw VS = DC {VS} with R1 = {R1} over R2 = {R2}.", "Name the junction OUT."],
+    analysis: { type: "op" }, useStudentAnalysis: false,
+    questions: [{ id: "vout", prompt: "Voltage at OUT, in volts", expect: "VS*R2/(R1+R2)", within: "2%", points: 4 }],
+    checks: [
+      { check: "parts", points: 3, expect: { R1: "{R1}", R2: "{R2}", VS: { dc: "{VS}" } } },
+      { check: "wiring", points: 3, rows: [["VS", [["R1", 0], 0], true], ["R1", [["VS", 0], "OUT"]], ["R2", ["OUT", 0]]] },
+      { check: "noOpenEnds", points: 1 },
+      { check: "nodeVoltage", points: 3, node: "OUT", expect: "VS*R2/(R1+R2)", within: "2%" }
+    ]
+  }]
+});
+
+const loaded = await page.evaluate((text) => {
+  const L = window.__spiceLab;
+  L.loadPackText(text, "test pack");
+  const options = [...document.querySelectorAll("#labSelect option")].map((o) => o.textContent);
+  return { options: options.filter((o) => /T1/.test(o)), groups: [...document.querySelectorAll("#labSelect optgroup")].map((g) => g.label) };
+}, packText);
+check("a loaded pack puts its items in the lab list",
+  loaded.options.length === 1 && loaded.groups.some((g) => /Test Midterm/.test(g)), JSON.stringify(loaded));
+
+// Sit it: two students get different papers, and each is marked on their own.
+const sitting = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  const out = {};
+  for (const who of ["Ada Lovelace", "Grace Hopper"]) {
+    const lab = L.labs.labById("pack-test-midterm-t1");
+    const v = L.labs.variantFor(lab, who);
+    S.edit((s) => { s.titleBlock = { ...s.titleBlock, name: who, date: "2026-10-01" }; }, "t");
+    const num = (t) => parseFloat(t) * (/k$/.test(t) ? 1000 : 1);
+    const vout = (parseFloat(v.VS) * num(v.R2)) / (num(v.R1) + num(v.R2));
+    S.loadCircuit({
+      comps: [
+        { type: "V", x: 160, y: 200, rot: 90, label: "VS", value: `DC ${v.VS}`, ac: "" },
+        { type: "R", x: 220, y: 140, label: "R1", value: v.R1 },
+        { type: "R", x: 340, y: 200, rot: 90, label: "R2", value: v.R2 },
+        { type: "NET", x: 340, y: 140, label: "N1", name: "OUT" },
+        { type: "GND", x: 250, y: 300, label: "GND" }
+      ],
+      wires: [
+        { x1: 160, y1: 200, x2: 160, y2: 140 }, { x1: 160, y1: 140, x2: 220, y2: 140 },
+        { x1: 280, y1: 140, x2: 340, y2: 140 }, { x1: 340, y1: 140, x2: 340, y2: 200 },
+        { x1: 340, y1: 260, x2: 340, y2: 280 }, { x1: 340, y1: 280, x2: 160, y2: 280 },
+        { x1: 160, y1: 260, x2: 160, y2: 280 }, { x1: 250, y1: 280, x2: 250, y2: 300 }
+      ],
+      probes: [], title: "Untitled circuit"
+    });
+    // one answers correctly, the other misreads it
+    S.edit((s) => { s.answers = { vout: who === "Ada Lovelace" ? vout.toFixed(3) : (vout * 1.4).toFixed(3) }; s.analysis.type = "op"; }, "t");
+    const marked = await L.labs.runChecks(lab, S);
+    out[who] = {
+      variant: v,
+      score: marked.score,
+      code: L.labs.encodeOutcome({ labId: lab.id, name: who, date: "2026-10-01", results: marked.results })
+    };
+  }
+  return out;
+});
+const ada = sitting["Ada Lovelace"], grace = sitting["Grace Hopper"];
+check("a pack exam marks a correct answer in full", ada.score.earned === ada.score.total,
+  `${ada.score.earned} of ${ada.score.total}`);
+check("and takes the marks off a wrong reading", grace.score.earned === grace.score.total - 4,
+  `${grace.score.earned} of ${grace.score.total}`);
+
+const batch = await page.evaluate(({ a, g }) => {
+  document.getElementById("examCode").value = `${a}\n${g}\nnot-a-code`;
+  document.getElementById("btnDecode").click();
+  const rows = [...document.querySelectorAll("#marksTable tbody tr")].map((tr) => [...tr.children].map((c) => c.textContent));
+  return { rows, csvOffered: !document.getElementById("btnMarksCsv").hidden };
+}, { a: ada.code, g: grace.code });
+check("a class's codes mark together into a table", batch.rows.length === 3 && /Ada Lovelace/.test(batch.rows[0][0]) && /Grace Hopper/.test(batch.rows[1][0]),
+  JSON.stringify(batch.rows));
+check("a code that cannot be read is listed rather than dropped", /unreadable/.test(batch.rows[2].join(" ")), batch.rows[2].join(" "));
+check("the marks differ, as the papers did", batch.rows[0][2] !== batch.rows[1][2], `${batch.rows[0][2]} vs ${batch.rows[1][2]}`);
+check("a CSV is offered for the gradebook", batch.csvOffered);
+
+// One link, no file: what a student gets on exam day.
+const link = await page.evaluate(async (text) => {
+  const L = window.__spiceLab;
+  L.loadPackText(text, "pack");
+  const share = await import("./share.js").catch(() => null);
+  void share;
+  return L.packLink ? await L.packLink() : null;
+}, packText);
+check("an exam pack can be turned into a link", !!link && /#pack/.test(link), link ? `${Math.round(link.length / 1024)} kB link` : "none");
+
+if (link) {
+  const fresh = await browser.newPage();
+  await fresh.goto(link.replace("http://localhost:PORT", `http://localhost:${PORT}`));
+  await fresh.waitForFunction(() => window.__spiceLab?.ready === true, null, { timeout: 20000 });
+  await fresh.waitForTimeout(800);
+  const opened = await fresh.evaluate(() => ({
+    lab: document.getElementById("labSelect").value,
+    title: document.getElementById("labTitle")?.textContent || "",
+    tasks: document.querySelectorAll("#labTasks li").length,
+    hash: window.location.hash,
+    button: document.getElementById("btnCheck").textContent
+  }));
+  check("opening that link loads the exam and opens the first item",
+    /pack-test-midterm/.test(opened.lab) && opened.tasks > 1, JSON.stringify(opened));
+  check("and it is an exam, marked once", /Submit exam answer/.test(opened.button), opened.button);
+  check("the link is cleared from the address bar afterwards", opened.hash === "", opened.hash);
+  const packSaved = await fresh.evaluate(() => JSON.parse(localStorage.getItem("q-circuits-packs-v1") || "[]").length);
+  check("the pack stays on that machine if the page is reloaded", packSaved === 1, `${packSaved} pack kept`);
+  await fresh.close();
+}
+
+// The real midterm pack: every item must be solvable for full marks.
+const midterm = JSON.parse(await (await import("fs/promises")).readFile(new URL("../examples/elec101-midterm.json", import.meta.url), "utf8"));
+const midtermSat = await page.evaluate(async (packText) => {
+  const L = window.__spiceLab, S = L.store;
+  L.loadPackText(packText, "midterm");
+  const num = (t) => {
+    const v = parseFloat(t);
+    return /k$/i.test(t) ? v * 1000 : v;
+  };
+  const out = {};
+
+  // One divider, drawn the same way for every item that needs one.
+  const divider = (r1, r2, vs, extra = {}) => ({
+    comps: [
+      { type: "V", x: 160, y: 200, rot: 90, label: "VS", value: `DC ${vs}`, ac: "" },
+      { type: "NET", x: 160, y: 200, label: "NA", name: "A" },
+      { type: "R", x: 220, y: 140, label: "R1", value: r1 },
+      { type: "NET", x: 340, y: 140, label: "NB", name: extra.outName || "B" },
+      { type: "R", x: 340, y: 200, rot: 90, label: "R2", value: r2 },
+      { type: "GND", x: 250, y: 260, label: "GND" },
+      ...(extra.comps || [])
+    ],
+    wires: [
+      { x1: 160, y1: 200, x2: 160, y2: 140 }, { x1: 160, y1: 140, x2: 220, y2: 140 },
+      { x1: 280, y1: 140, x2: 340, y2: 140 }, { x1: 340, y1: 140, x2: 340, y2: 200 },
+      { x1: 340, y1: 260, x2: 250, y2: 260 }, { x1: 250, y1: 260, x2: 160, y2: 260 },
+      { x1: 160, y1: 260, x2: 160, y2: 260 }
+    ],
+    probes: [], title: "Untitled circuit"
+  });
+
+  const sit = async (code, build) => {
+    const lab = L.labs.labById(`pack-elec101-midterm-${code.toLowerCase()}`);
+    S.edit((s) => { s.titleBlock = { ...s.titleBlock, name: "Ada Lovelace", date: "2026-10-20" }; }, "t");
+    const v = L.labs.variantFor(lab, "Ada Lovelace");
+    await build(lab, v);
+    const marked = await L.labs.runChecks(lab, S);
+    out[code] = {
+      variant: v, score: marked.score,
+      missed: marked.results.filter((r) => !r.pass).map((r) => `${r.label}: ${r.detail}`)
+    };
+  };
+
+  await sit("M1", async (lab, v) => {
+    S.loadCircuit(divider(v.R1, v.R2, v.VS, { outName: "OUT" }));
+    S.edit((s) => {
+      s.analysis.type = "op";
+      s.answers = { vout: ((num(v.VS) * num(v.R2)) / (num(v.R1) + num(v.R2))).toFixed(4) };
+    }, "t");
+  });
+
+  await sit("M2", async (lab, v) => {
+    S.loadCircuit(divider(v.R1, v.R2, v.VS));
+    S.toggleProbe("v", "340,140", { x: 340, y: 140 });
+    S.edit((s) => {
+      s.analysis.type = "op";
+      s.answers = { vb: ((num(v.VS) * num(v.R2)) / (num(v.R1) + num(v.R2))).toFixed(4) };
+    }, "t");
+  });
+
+  await sit("M3", async (lab, v) => {
+    S.loadCircuit(divider(v.R1, v.R2, "0"));
+    S.toggleProbe("vd", "160,200|340,140", { x: 160, y: 200, x2: 340, y2: 140 });
+    S.edit((s) => {
+      Object.assign(s.analysis, { type: "dc", dcSrc: "VS", dcStart: `-${v.STOP}`, dcStop: v.STOP, dcStep: "0.1" });
+      s.answers = { vr1: ((num(v.STOP) * num(v.R1)) / (num(v.R1) + num(v.R2))).toFixed(4) };
+    }, "t");
+  });
+
+  await sit("M5", async (lab, v) => {
+    S.loadCircuit({
+      comps: [
+        { type: "VPULSE", x: 160, y: 200, rot: 90, label: "VS", v1: "0", v2: v.V2, td: "0", tr: "1u", tf: "1u", pw: "1m", per: "2m" },
+        { type: "NET", x: 160, y: 200, label: "NA", name: "IN" },
+        { type: "R", x: 220, y: 140, label: "R1", value: v.R1 },
+        { type: "NET", x: 340, y: 140, label: "NB", name: "OUT" },
+        { type: "C", x: 340, y: 200, rot: 90, label: "C1", value: v.C1, ic: "" },
+        { type: "GND", x: 250, y: 260, label: "GND" }
+      ],
+      wires: [
+        { x1: 160, y1: 200, x2: 160, y2: 140 }, { x1: 160, y1: 140, x2: 220, y2: 140 },
+        { x1: 280, y1: 140, x2: 340, y2: 140 }, { x1: 340, y1: 140, x2: 340, y2: 200 },
+        { x1: 340, y1: 260, x2: 250, y2: 260 }, { x1: 250, y1: 260, x2: 160, y2: 260 }
+      ],
+      probes: [], title: "Untitled circuit"
+    });
+    S.toggleProbe("i", "R1", { x: 250, y: 140 });
+    S.edit((s) => {
+      Object.assign(s.analysis, { type: "tran", trStop: "2m", trStep: "2u" });
+      s.answers = { ipk: (num(v.V2) / num(v.R1)).toPrecision(4) };
+    }, "t");
+  });
+
+  await sit("M4", async (lab, v) => {
+    S.loadCircuit(divider("{RVAL}", v.R2, v.VS, {
+      comps: [{ type: "PARAM", x: 160, y: 80, label: "PARAM1", name: "RVAL", value: v.FROM }]
+    }));
+    S.edit((s) => {
+      s.analysis.type = "op";
+      Object.assign(s.analysis, {
+        paramOn: true, paramName: "RVAL", paramMode: "range",
+        paramStart: v.FROM, paramStop: String(num(v.FROM) + 2 * num(v.BY)), paramStep: v.BY
+      });
+      const last = num(v.FROM) + 2 * num(v.BY);
+      s.answers = { vlast: ((num(v.VS) * num(v.R2)) / (last + num(v.R2))).toFixed(4) };
+    }, "t");
+  });
+
+  return out;
+}, JSON.stringify(midterm));
+
+for (const code of ["M1", "M2", "M3", "M4", "M5"]) {
+  const r = midtermSat[code];
+  check(`midterm ${code} can be answered for full marks`, r.score.earned === r.score.total,
+    `${r.score.earned} of ${r.score.total}${r.missed.length ? ` — missed: ${r.missed.join(" | ")}` : ""}`);
+}
+const untouchedMidterm = await page.evaluate(async () => {
+  const L = window.__spiceLab, S = L.store;
+  const out = {};
+  for (const code of ["M1", "M2", "M3", "M4", "M5"]) {
+    const lab = L.labs.labById(`pack-elec101-midterm-${code.toLowerCase()}`);
+    S.edit((s) => { s.titleBlock = { ...s.titleBlock, name: "Ada Lovelace" }; }, "t");
+    S.loadCircuit(L.labs.labCircuit ? L.labs.labCircuit(lab, L.labs.variantFor(lab, "Ada Lovelace")) : lab.circuit(L.labs.variantFor(lab, "Ada Lovelace")));
+    const marked = await L.labs.runChecks(lab, S);
+    out[code] = marked.score;
+  }
+  return out;
+});
+check("a sheet left as it started scores well under half",
+  Object.values(untouchedMidterm).every((s) => s.earned < s.total / 2),
+  Object.entries(untouchedMidterm).map(([k, v]) => `${k} ${v.earned}/${v.total}`).join(", "));
+
+check("every item is worth the same twenty marks",
+  Object.values(midtermSat).every((r) => r.score.total === 20),
+  Object.entries(midtermSat).map(([k, r]) => `${k}:${r.score.total}`).join(" "));
+check("the midterm is worth what the paper will say",
+  Object.values(midtermSat).reduce((t, r) => t + r.score.total, 0) === 100,
+  `${Object.values(midtermSat).reduce((t, r) => t + r.score.total, 0)} marks in total`);
+
+// A pack with mistakes has to say where they are.
+const badPack = await page.evaluate(() => {
+  const L = window.__spiceLab;
+  L.loadPackText(JSON.stringify({
+    title: "Broken",
+    items: [{
+      code: "B1", title: "B1", tasks: ["do it"],
+      vary: { R1: ["1k"] },
+      questions: [{ prompt: "What?", expect: "R1*NOPE" }],
+      checks: [{ check: "nosuchcheck" }, { check: "nodeVoltage", node: "OUT", expect: "1/(" }]
+    }]
+  }), "broken.json");
+  return [...document.querySelectorAll("#packNote .pack-errors li")].map((li) => li.textContent);
+});
+check("a pack with a bad check name says which names exist",
+  badPack.some((t) => /no check called "nosuchcheck"/.test(t)), badPack.join(" | "));
+check("every bad formula is reported, not just the first",
+  badPack.some((t) => /NOPE/.test(t)) && badPack.some((t) => /incomplete/.test(t)), badPack.join(" | "));
+
+const packsGone = await page.evaluate(() => {
+  document.getElementById("btnPackClear").click();
+  return [...document.querySelectorAll("#labSelect option")].some((o) => /T1/.test(o.textContent));
+});
+check("packs can be taken off the machine again", !packsGone);
+
 console.log("\n— checking my work —");
 const marking = await page.evaluate(async () => {
   const L = window.__spiceLab, S = L.store;

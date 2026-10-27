@@ -1,0 +1,641 @@
+{
+  "id": "elec101-midterm",
+  "title": "ELEC 101 \u00b7 Midterm (Labs 4\u20137)",
+  "items": [
+    {
+      "code": "M1",
+      "kind": "fix",
+      "title": "M1 \u00b7 Find and fix the errors",
+      "summary": "A divider drawn badly. Three things on the sheet are wrong: correct them so it matches the paper, then read the output.",
+      "vary": {
+        "VS": [
+          "9",
+          "12",
+          "15",
+          "18"
+        ],
+        "R1": [
+          "1k",
+          "1.5k",
+          "2.2k",
+          "3.3k"
+        ],
+        "R2": [
+          "2.2k",
+          "3.3k",
+          "4.7k",
+          "6.8k"
+        ]
+      },
+      "tasks": [
+        "Type your name under the sheet before you start. Your values come from it.",
+        "The paper's circuit is VS = DC {VS} volts, R1 = {R1} above R2 = {R2}, with the junction named OUT and the bottom of R2 grounded.",
+        "Three things on this sheet are wrong. The open circles and the warnings under the sheet point at them. Fix every one.",
+        "Set the analysis to Operating point, run it, and enter the voltage at OUT.",
+        "Press Submit exam answer once when you are done."
+      ],
+      "analysis": {
+        "type": "op"
+      },
+      "useStudentAnalysis": false,
+      "circuit": {
+        "comps": [
+          {
+            "type": "V",
+            "x": 160,
+            "y": 200,
+            "rot": 90,
+            "label": "VS",
+            "value": "DC {VS}",
+            "ac": ""
+          },
+          {
+            "type": "R",
+            "x": 220,
+            "y": 140,
+            "label": "R1",
+            "value": "470"
+          },
+          {
+            "type": "R",
+            "x": 340,
+            "y": 200,
+            "rot": 90,
+            "label": "R2",
+            "value": "{R2}"
+          },
+          {
+            "type": "NET",
+            "x": 340,
+            "y": 140,
+            "label": "N1",
+            "name": "OUT"
+          }
+        ],
+        "wires": [
+          {
+            "x1": 160,
+            "y1": 200,
+            "x2": 160,
+            "y2": 140
+          },
+          {
+            "x1": 160,
+            "y1": 140,
+            "x2": 220,
+            "y2": 140
+          },
+          {
+            "x1": 280,
+            "y1": 140,
+            "x2": 340,
+            "y2": 140
+          },
+          {
+            "x1": 340,
+            "y1": 140,
+            "x2": 340,
+            "y2": 200
+          },
+          {
+            "x1": 340,
+            "y1": 200,
+            "x2": 400,
+            "y2": 200
+          },
+          {
+            "x1": 400,
+            "y1": 200,
+            "x2": 400,
+            "y2": 260
+          },
+          {
+            "x1": 400,
+            "y1": 260,
+            "x2": 340,
+            "y2": 260
+          },
+          {
+            "x1": 340,
+            "y1": 260,
+            "x2": 160,
+            "y2": 260
+          },
+          {
+            "x1": 160,
+            "y1": 260,
+            "x2": 160,
+            "y2": 260
+          }
+        ],
+        "seq": {
+          "R": 2,
+          "V": 1,
+          "NET": 1
+        }
+      },
+      "questions": [
+        {
+          "id": "vout",
+          "prompt": "Voltage at OUT, in volts",
+          "expect": "VS*R2/(R1+R2)",
+          "within": "2%",
+          "points": 4
+        }
+      ],
+      "checks": [
+        {
+          "check": "parts",
+          "points": 4,
+          "expect": {
+            "R1": "{R1}",
+            "R2": "{R2}",
+            "VS": {
+              "dc": "{VS}"
+            }
+          }
+        },
+        {
+          "check": "wiring",
+          "points": 5,
+          "rows": [
+            [
+              "VS",
+              [
+                [
+                  "R1",
+                  0
+                ],
+                0
+              ],
+              true
+            ],
+            [
+              "R1",
+              [
+                [
+                  "VS",
+                  0
+                ],
+                "OUT"
+              ]
+            ],
+            [
+              "R2",
+              [
+                "OUT",
+                0
+              ]
+            ]
+          ]
+        },
+        {
+          "check": "noOpenEnds",
+          "points": 3
+        },
+        {
+          "check": "nodeVoltage",
+          "points": 4,
+          "node": "OUT",
+          "expect": "VS*R2/(R1+R2)",
+          "within": "2%"
+        }
+      ]
+    },
+    {
+      "code": "M2",
+      "kind": "draw",
+      "title": "M2 \u00b7 Draw a series circuit and find its bias point",
+      "summary": "Draw the circuit from the paper, name its nodes, and report the operating-point voltage between the resistors.",
+      "vary": {
+        "VS": [
+          "10",
+          "12",
+          "15",
+          "20"
+        ],
+        "R1": [
+          "100",
+          "220",
+          "330",
+          "470"
+        ],
+        "R2": [
+          "300",
+          "680",
+          "1k",
+          "1.5k"
+        ]
+      },
+      "tasks": [
+        "Type your name under the sheet before you start. Your values come from it.",
+        "Draw the paper's circuit: VS = DC {VS} volts, R1 = {R1} and R2 = {R2} in series, with the bottom of R2 grounded.",
+        "Name the node at VS's positive side A, and the node between R1 and R2 B.",
+        "Put a voltage probe on B.",
+        "Run an Operating point analysis and enter the voltage at B.",
+        "Press Submit exam answer once when you are done."
+      ],
+      "analysis": {
+        "type": "op"
+      },
+      "useStudentAnalysis": false,
+      "questions": [
+        {
+          "id": "vb",
+          "prompt": "Voltage at B, in volts",
+          "expect": "VS*R2/(R1+R2)",
+          "within": "2%",
+          "points": 4
+        }
+      ],
+      "checks": [
+        {
+          "check": "parts",
+          "points": 4,
+          "expect": {
+            "R1": "{R1}",
+            "R2": "{R2}",
+            "VS": {
+              "dc": "{VS}"
+            }
+          }
+        },
+        {
+          "check": "wiring",
+          "points": 4,
+          "rows": [
+            [
+              "VS",
+              [
+                "A",
+                0
+              ],
+              true
+            ],
+            [
+              "R1",
+              [
+                "A",
+                "B"
+              ]
+            ],
+            [
+              "R2",
+              [
+                "B",
+                0
+              ]
+            ]
+          ]
+        },
+        {
+          "check": "noOpenEnds",
+          "points": 2
+        },
+        {
+          "check": "probe",
+          "points": 2,
+          "node": "B"
+        },
+        {
+          "check": "nodeVoltage",
+          "points": 4,
+          "node": "B",
+          "expect": "VS*R2/(R1+R2)",
+          "within": "2%"
+        }
+      ]
+    },
+    {
+      "code": "M3",
+      "kind": "draw",
+      "title": "M3 \u00b7 DC sweep with a differential probe",
+      "summary": "Build the divider again, sweep the source, and measure across R1 rather than to ground.",
+      "vary": {
+        "R1": [
+          "100",
+          "220",
+          "470",
+          "1k"
+        ],
+        "R2": [
+          "300",
+          "680",
+          "1k",
+          "2.2k"
+        ],
+        "STOP": [
+          "10",
+          "12",
+          "15",
+          "20"
+        ]
+      },
+      "tasks": [
+        "Type your name under the sheet before you start. Your values come from it.",
+        "Draw the paper's circuit: VS (DC 0) feeding R1 = {R1} then R2 = {R2} to ground, with A at VS's positive side and B between the resistors.",
+        "Set a DC sweep of VS from -{STOP} to {STOP} in steps of 0.1.",
+        "Use the Diff probe to measure A against B, so the plot shows the voltage across R1.",
+        "Run it, and enter what that probe reads when VS is at +{STOP}.",
+        "Press Submit exam answer once when you are done."
+      ],
+      "questions": [
+        {
+          "id": "vr1",
+          "prompt": "Voltage across R1 when VS is at its most positive, in volts",
+          "expect": "STOP*R1/(R1+R2)",
+          "within": "3%",
+          "points": 3
+        }
+      ],
+      "checks": [
+        {
+          "check": "parts",
+          "points": 3,
+          "expect": {
+            "R1": "{R1}",
+            "R2": "{R2}"
+          }
+        },
+        {
+          "check": "wiring",
+          "points": 3,
+          "rows": [
+            [
+              "VS",
+              [
+                "A",
+                0
+              ],
+              true
+            ],
+            [
+              "R1",
+              [
+                "A",
+                "B"
+              ]
+            ],
+            [
+              "R2",
+              [
+                "B",
+                0
+              ]
+            ]
+          ]
+        },
+        {
+          "check": "noOpenEnds",
+          "points": 2
+        },
+        {
+          "check": "analysis",
+          "points": 3,
+          "type": "dc",
+          "source": "VS",
+          "start": "-{STOP}",
+          "stop": "{STOP}",
+          "step": "0.1"
+        },
+        {
+          "check": "diffProbe",
+          "points": 3,
+          "plus": "A",
+          "minus": "B"
+        },
+        {
+          "check": "valueAt",
+          "points": 3,
+          "node": "A",
+          "minus": "B",
+          "at": "STOP",
+          "expect": "STOP*R1/(R1+R2)",
+          "within": "3%",
+          "label": "The probe reads the voltage across R1 at the top of the sweep"
+        }
+      ]
+    },
+    {
+      "code": "M4",
+      "kind": "draw",
+      "title": "M4 \u00b7 Parametric sweep",
+      "summary": "The same divider with R1 stepped through a range, as a parameter rather than a fixed value.",
+      "vary": {
+        "VS": [
+          "10",
+          "12",
+          "15",
+          "20"
+        ],
+        "R2": [
+          "300",
+          "680",
+          "1k",
+          "2.2k"
+        ],
+        "FROM": [
+          "100",
+          "200"
+        ],
+        "BY": [
+          "100",
+          "200"
+        ]
+      },
+      "tasks": [
+        "Type your name under the sheet before you start. Your values come from it.",
+        "Draw the paper's circuit: VS = DC {VS} volts into R1, then R2 = {R2} to ground, with B between the resistors.",
+        "Place a Parameter part and set RVAL to {FROM}. Give R1 the value {RVAL} so it follows the parameter.",
+        "Turn on the parametric sweep and step RVAL from {FROM} by {BY}, three values in all.",
+        "Run an Operating point analysis, and enter the voltage at B for the last of the three values.",
+        "Press Submit exam answer once when you are done."
+      ],
+      "analysis": {
+        "type": "op"
+      },
+      "useStudentAnalysis": false,
+      "questions": [
+        {
+          "id": "vlast",
+          "prompt": "Voltage at B for the largest R1, in volts",
+          "expect": "VS*R2/(FROM+2*BY+R2)",
+          "within": "3%",
+          "points": 6
+        }
+      ],
+      "checks": [
+        {
+          "check": "parts",
+          "points": 3,
+          "expect": {
+            "R2": "{R2}",
+            "VS": {
+              "dc": "{VS}"
+            }
+          }
+        },
+        {
+          "check": "wiring",
+          "points": 3,
+          "rows": [
+            [
+              "VS",
+              [
+                "A",
+                0
+              ],
+              true
+            ],
+            [
+              "R1",
+              [
+                "A",
+                "B"
+              ]
+            ],
+            [
+              "R2",
+              [
+                "B",
+                0
+              ]
+            ]
+          ]
+        },
+        {
+          "check": "noOpenEnds",
+          "points": 2
+        },
+        {
+          "check": "parametric",
+          "points": 6,
+          "name": "RVAL",
+          "from": "{FROM}",
+          "to": "FROM+2*BY",
+          "by": "{BY}"
+        }
+      ]
+    },
+    {
+      "code": "M5",
+      "kind": "draw",
+      "title": "M5 \u00b7 Transient run with a current probe",
+      "summary": "A pulse source into a resistor and capacitor. Measure the current through the resistor rather than a voltage.",
+      "vary": {
+        "V2": [
+          "5",
+          "9",
+          "12",
+          "15"
+        ],
+        "R1": [
+          "470",
+          "1k",
+          "2.2k",
+          "4.7k"
+        ],
+        "C1": [
+          "47n",
+          "100n",
+          "220n"
+        ]
+      },
+      "tasks": [
+        "Type your name under the sheet before you start. Your values come from it.",
+        "Draw the paper's circuit: a Pulse source VS into R1 = {R1}, then C1 = {C1} to ground. Name the node at the source IN.",
+        "Set the pulse to go from 0 to {V2} volts, delay 0, rise and fall 1u, width 1m, period 2m.",
+        "Put a current probe on R1: click the part itself, not a wire.",
+        "Run a Transient analysis to 2m with a time step of 2u, and enter the peak current through R1 in amps.",
+        "Press Submit exam answer once when you are done."
+      ],
+      "useStudentAnalysis": true,
+      "reference": {
+        "type": "tran",
+        "trStop": "2m",
+        "trStep": "2u"
+      },
+      "questions": [
+        {
+          "id": "ipk",
+          "prompt": "Peak current through R1, in amps",
+          "expect": "V2/R1",
+          "within": "4%",
+          "points": 3
+        }
+      ],
+      "checks": [
+        {
+          "check": "parts",
+          "points": 3,
+          "expect": {
+            "R1": "{R1}",
+            "C1": "{C1}",
+            "VS": {
+              "type": "VPULSE",
+              "fields": {
+                "v1": "0",
+                "v2": "{V2}",
+                "pw": "1m",
+                "per": "2m"
+              }
+            }
+          }
+        },
+        {
+          "check": "wiring",
+          "points": 3,
+          "rows": [
+            [
+              "VS",
+              [
+                "IN",
+                0
+              ],
+              true
+            ],
+            [
+              "R1",
+              [
+                "IN",
+                "OUT"
+              ]
+            ],
+            [
+              "C1",
+              [
+                "OUT",
+                0
+              ]
+            ]
+          ]
+        },
+        {
+          "check": "noOpenEnds",
+          "points": 2
+        },
+        {
+          "check": "analysis",
+          "points": 3,
+          "type": "tran",
+          "stop": "2m",
+          "step": "2u"
+        },
+        {
+          "check": "currentProbe",
+          "points": 3,
+          "part": "R1"
+        },
+        {
+          "check": "extreme",
+          "points": 3,
+          "part": "R1",
+          "which": "max",
+          "expect": "V2/R1",
+          "within": "4%",
+          "label": "The current through R1 peaks where the pulse steps up"
+        }
+      ]
+    }
+  ]
+}

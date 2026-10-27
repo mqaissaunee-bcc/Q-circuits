@@ -122,6 +122,37 @@ export async function decodeCircuit(hash = window.location.hash) {
   }
 }
 
+/* ----------------------------------------------------------- exam packs */
+
+const PACK_PREFIX = "pack";
+
+/**
+ * An exam pack in a link. Students should not be loading files on exam day:
+ * one link from the course page opens the exam ready to sit.
+ */
+export async function encodePackLink(packJson, href = window.location.href) {
+  const bytes = new TextEncoder().encode(String(packJson));
+  const packed = await deflate(bytes);
+  const body = packed && packed.length < bytes.length ? packed : bytes;
+  const kind = packed && packed.length < bytes.length ? PACK_PREFIX : `${PACK_PREFIX}p`;
+  return `${href.split("#")[0].split("?")[0]}#${kind}=${bytesToBase64Url(body)}`;
+}
+
+/** Read a pack out of a hash fragment, or null when there is none. */
+export async function decodePackHash(hash = window.location.hash) {
+  const raw = String(hash || "").replace(/^#/, "");
+  const eq = raw.indexOf("=");
+  if (eq < 1) return null;
+  const kind = raw.slice(0, eq);
+  if (kind !== PACK_PREFIX && kind !== `${PACK_PREFIX}p`) return null;
+  try {
+    const bytes = base64UrlToBytes(raw.slice(eq + 1));
+    return new TextDecoder().decode(kind === PACK_PREFIX ? await inflate(bytes) : bytes);
+  } catch {
+    throw new Error("That exam link could not be read. It may have been cut short when it was copied or pasted.");
+  }
+}
+
 /** Drop the payload from the address bar without reloading. */
 export function clearHash() {
   if (window.location.hash) {

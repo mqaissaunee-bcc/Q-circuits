@@ -734,3 +734,12 @@ body.diagram-popup { margin: 0; background: var(--panel); }
 .checking { margin: var(--sp-2) 0 0; color: var(--ink-soft); }
 .check-failed { margin: var(--sp-2) 0 0; color: var(--danger); }
 .build-stamp { margin: var(--sp-1) 0 0; font-size: .72rem; color: var(--ink-soft); font-family: var(--mono); }
+
+/* instructor: marking and exam packs */
+.file-button { display: inline-flex; align-items: center; min-height: 44px; padding: 0 var(--sp-3);
+  border: 1px solid var(--rule); border-radius: var(--radius); cursor: pointer; font-weight: 600; }
+.file-button:hover { background: var(--panel-2); }
+.pack-note { margin: var(--sp-2) 0 0; color: var(--ink-soft); }
+.pack-errors { margin-top: var(--sp-2); padding: var(--sp-2); border-left: 3px solid var(--danger); background: var(--danger-soft, transparent); }
+.pack-errors ul { margin: var(--sp-1) 0 0; padding-left: var(--sp-3); }
+#marksTable { margin-top: var(--sp-2); }

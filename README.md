@@ -239,6 +239,8 @@ src/
   diagram.js        the floating, read-only Reference diagram window
   submission.js     one attempt as a single PNG to hand in
   authoring.js      the sheet as lab-diagram source, for writing new labs
+  exampack.js       exams as a file: a check vocabulary and a small
+                    expression parser, so a pack carries no code
   digital.js        gates, the 7473, 74151A, 74154, the 555, STIM1 and
                     DigClock from behavioural sources
   main.js           wiring: panels redraw from one refresh()
@@ -710,6 +712,53 @@ would not stop a determined forgery.
 
 Two examples ship in `EXAMS` in `src/labs.js`: a fix-it midterm item and a
 draw-it final item. Both are worth copying for new ones.
+
+### Marking a class
+
+*Instructor: exams* in the Lab panel (full view) takes result codes. One code
+gives that student's breakdown; a class's worth, one per line, gives a table
+of names, exams, marks and dates, with unreadable codes listed rather than
+dropped, and a **CSV** for the gradebook. Nothing leaves the machine.
+
+### Exam packs
+
+An exam written in `src/labs.js` needs a rebuild and a deploy. A pack is the
+same exam as a JSON file: *Load exam pack* adds its items to the lab list on
+that machine, and they survive a reload. `examples/midterm-pack.json` is a
+working two-item pack to copy.
+
+The parts of an exam that are already data come across as they are — tasks,
+starting circuit, the values to vary, questions, marks. The checks cannot: a
+file must not carry code to run. So a pack names checks from a vocabulary
+(`CHECKS` in `src/exampack.js`: title, parts, wiring, pins, gate, noOpenEnds,
+probe, probeOrder, analysis, nodeVoltage, gain, corner) and each is turned
+into the builder that already exists.
+
+Expressions such as `"VS*R2/(R1+R2)"` and `"1/(2*pi*R1*C1)"` are read by a
+small parser in that file, never by eval: arithmetic, SPICE suffixes, a few
+functions, and this student's own values. `{NAME}` placeholders are filled
+anywhere in a pack — in task text, part values, wiring, even nested objects —
+and a placeholder that stands alone becomes a number, so `"dc": "{VS}"` means
+what `"dc": 12` means.
+
+**An exam link is how a class gets the pack.** Students should not be
+loading files while an exam clock runs: *Copy exam link* puts the whole pack
+in a URL (the two-item example comes to about 1.5 kB, compressed), and
+clicking it loads the exam and opens the first item, with the link cleared
+from the address bar afterwards. Post it on the course page. A pack hosted as
+a file can be linked as `…/index.html?pack=URL` instead, which keeps the link
+short and lets the questions be changed without reissuing it.
+
+`examples/elec101-midterm.json` is the ELEC 101 midterm: five items of 20
+marks drawn from Labs 4 to 7 — fix the errors, draw and bias, DC sweep with a
+differential probe, parametric sweep, and a transient read with a current
+probe. `test/labs101.mjs` sits all five as a student would and requires 20 of
+20 on each, which is the check that matters: an exam nobody can answer in
+full is the one failure you cannot fix on the day.
+
+A pack is checked when it loads, against a sample student: unknown check
+names, formulas that cannot be worked out and missing fields are all listed
+together, so a pack with two typos does not take two goes to fix.
 
 ### What an exam cannot do
 

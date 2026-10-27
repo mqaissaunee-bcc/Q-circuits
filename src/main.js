@@ -12,7 +12,7 @@ import { Store, DEFAULT_ANALYSIS, DEFAULT_PLOT, DEFAULT_TITLE_BLOCK } from "./st
 import { createCanvas } from "./canvas.js";
 import { createScope } from "./scope.js";
 import { runNetlist, engineReady } from "./engine.js";
-import { LABS, LAB_GROUPS, LAB_KINDS, labById, runChecks, corners, diagramFor,
+import { LABS, LAB_GROUPS, LAB_KINDS, labById, runChecks, corners, diagramFor, allLabs, allGroups, setExtraLabs,
   variantFor, labTasks, labCircuit, labQuestions, encodeOutcome, decodeOutcome, scoreOf } from "./labs.js";
 import { simulate, probedTraces, previewNetlist } from "./simulate.js";
 import { explainEngineError } from "./errors.js";
@@ -21,6 +21,8 @@ import { exportSvg, exportCanvas } from "./export-png.js";
 import { createDiagramWindow } from "./diagram.js";
 import { buildSubmissionSheet } from "./submission.js";
 import { labDiagramSource } from "./authoring.js";
+import { parsePack } from "./exampack.js";
+import { encodePackLink, decodePackHash } from "./share.js";
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -990,8 +992,8 @@ function renderLabList() {
   labSelect.appendChild(free);
 
   let passed = 0;
-  LAB_GROUPS.forEach((g) => {
-    const labs = LABS.filter((l) => l.group === g.id);
+  allGroups().forEach((g) => {
+    const labs = allLabs().filter((l) => l.group === g.id);
     if (!labs.length) return;
     const og = document.createElement("optgroup");
     og.label = g.title;
@@ -1008,7 +1010,7 @@ function renderLabList() {
   labSelect.value = keep;
 
   const tally = $("labTally");
-  tally.textContent = passed ? `${passed} of ${LABS.length} passed` : "";
+  tally.textContent = passed ? `${passed} of ${allLabs().length} passed` : "";
 }
 renderLabList();
 
@@ -1079,51 +1081,266 @@ labSelect.addEventListener("change", () => {
 });
 
 /**
- * For whoever marks the exams: a student's sheet carries a code, and this
- * turns it back into the list of checks with the marks each was worth.
+ * Marking. A student's sheet carries a result code; one code gives the
+ * breakdown, and a class's worth of codes gives a table and a CSV for the
+ * gradebook. Nothing here leaves the machine.
  */
-$("btnDecode").addEventListener("click", () => {
+let lastMarks = [];
+
+function markOne(code) {
+  const decoded = decodeOutcome(code);
+  if (!decoded) return { code, error: "unreadable" };
+  const lab = labById(decoded.labId);
+  if (!lab) return { code, name: decoded.name, error: `not an exam on this machine (${decoded.labId})` };
+  const variant = variantFor(lab, decoded.name);
+  const checks = [
+    ...(typeof lab.checks === "function" ? lab.checks(variant) : lab.checks),
+    ...(typeof lab.questions === "function" ? lab.questions(variant) : lab.questions || [])
+      .map((q) => ({ label: `Answer: ${q.prompt}`, points: q.points }))
+  ];
+  const results = checks.map((_, i) => ({ pass: !!decoded.bits[i] }));
+  const score = scoreOf(checks, results);
+  return { code, name: decoded.name, date: decoded.date, lab, checks, results, ...score };
+}
+
+function renderOneMark(mark) {
   const host = $("checkResults");
   host.replaceChildren();
-  const decoded = decodeOutcome($("examCode").value);
-  if (!decoded) {
-    say("That code could not be read. It may have been mistyped, or the sheet edited after it was made.");
-    return;
-  }
-  const lab = labById(decoded.labId);
-  if (!lab) {
-    say(`The code is for ${decoded.labId}, which is not an exam in this copy of Q Circuits.`);
-    return;
-  }
-  const variant = variantFor(lab, decoded.name);
-  const checks = [...(typeof lab.checks === "function" ? lab.checks(variant) : lab.checks),
-    ...(typeof lab.questions === "function" ? lab.questions(variant) : lab.questions || [])
-      .map((q) => ({ label: `Answer: ${q.prompt}`, points: q.points }))];
-  const results = checks.map((_, i) => ({ pass: !!decoded.bits[i] }));
-  const { earned, total, percent } = scoreOf(checks, results);
-
   const head = document.createElement("p");
   head.className = "exam-score";
-  head.textContent = `${decoded.name || "unnamed"} — ${lab.title} — ${earned} of ${total} marks (${Math.round(percent)}%) on ${decoded.date}`;
+  head.textContent = `${mark.name || "unnamed"} — ${mark.lab.title} — ${mark.earned} of ${mark.total} marks (${Math.round(mark.percent)}%) on ${mark.date}`;
   host.appendChild(head);
 
   const ul = document.createElement("ul");
   ul.className = "check-list";
-  checks.forEach((c, i) => {
+  mark.checks.forEach((c, i) => {
     const li = document.createElement("li");
-    li.className = results[i].pass ? "pass" : "fail";
-    const mark = document.createElement("span");
-    mark.className = "check-mark";
-    mark.textContent = results[i].pass ? "✓" : "✗";
+    li.className = mark.results[i].pass ? "pass" : "fail";
+    const tick = document.createElement("span");
+    tick.className = "check-mark";
+    tick.textContent = mark.results[i].pass ? "✓" : "✗";
     const text = document.createElement("span");
     const worth = c.points === undefined ? 1 : c.points;
     text.textContent = `${c.label} (${worth} mark${worth === 1 ? "" : "s"})`;
-    li.append(mark, text);
+    li.append(tick, text);
     ul.appendChild(li);
   });
   host.appendChild(ul);
-  say(`${decoded.name || "Unnamed"} scored ${earned} of ${total} marks.`);
+}
+
+function renderMarksTable(marks) {
+  const host = $("marksTable");
+  host.replaceChildren();
+  const table = document.createElement("table");
+  table.className = "measure-table";
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  ["Student", "Exam", "Marks", "%", "Date"].forEach((label, i) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    if (i > 1) th.className = "num";
+    hr.appendChild(th);
+  });
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  const body = document.createElement("tbody");
+  marks.forEach((m) => {
+    const tr = document.createElement("tr");
+    const name = document.createElement("th");
+    name.scope = "row";
+    name.textContent = m.name || "—";
+    tr.appendChild(name);
+    const cells = m.error
+      ? [m.error, "—", "—", "—"]
+      : [m.lab.code || m.lab.title, `${m.earned} of ${m.total}`, `${Math.round(m.percent)}`, m.date];
+    cells.forEach((text, i) => {
+      const td = document.createElement("td");
+      if (i > 0) td.className = "num";
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+    if (m.error) tr.className = "fail";
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  host.appendChild(table);
+}
+
+$("btnDecode").addEventListener("click", () => {
+  const codes = $("examCode").value.split(/\n+/).map((t) => t.trim()).filter(Boolean);
+  if (!codes.length) { say("Paste one or more result codes first."); return; }
+  lastMarks = codes.map(markOne);
+  const bad = lastMarks.filter((m) => m.error).length;
+
+  if (lastMarks.length === 1 && !bad) {
+    renderOneMark(lastMarks[0]);
+    $("marksTable").replaceChildren();
+    $("btnMarksCsv").hidden = false;
+    say(`${lastMarks[0].name || "Unnamed"} scored ${lastMarks[0].earned} of ${lastMarks[0].total} marks.`);
+    return;
+  }
+  $("checkResults").replaceChildren();
+  renderMarksTable(lastMarks);
+  $("btnMarksCsv").hidden = false;
+  say(bad
+    ? `${lastMarks.length - bad} of ${lastMarks.length} codes marked; ${bad} could not be read.`
+    : `${lastMarks.length} answer sheets marked.`);
 });
+
+$("btnMarksCsv").addEventListener("click", () => {
+  const rows = [["Student", "Exam", "Marks", "Total", "Percent", "Date", "Problem"]];
+  lastMarks.forEach((m) => rows.push(m.error
+    ? [m.name || "", "", "", "", "", "", m.error]
+    : [m.name || "", m.lab.code || m.lab.title, m.earned, m.total, Math.round(m.percent), m.date, ""]));
+  const csv = rows.map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "exam-marks.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  say(`Marks for ${lastMarks.length} sheet${lastMarks.length === 1 ? "" : "s"} saved as exam-marks.csv.`);
+});
+
+/* ------------------------------------------------------------ exam packs */
+
+const PACK_KEY = "q-circuits-packs-v1";
+
+/** Show what is loaded, and let it be taken away again. */
+function renderPackNote(packs) {
+  const host = $("packNote");
+  host.replaceChildren();
+  $("btnPackClear").hidden = !packs.length;
+  if (!packs.length) return;
+  const p = document.createElement("p");
+  p.className = "pack-note";
+  p.textContent = packs.map((k) => `${k.title}: ${k.labs.length} item${k.labs.length === 1 ? "" : "s"}`).join(" · ");
+  host.appendChild(p);
+}
+
+function applyPacks(packs) {
+  setExtraLabs(packs.flatMap((p) => p.labs), packs.map((p) => ({ id: p.id, title: p.title })));
+  renderLabList();
+  renderPackNote(packs);
+  $("btnPackLink").hidden = !packs.length;
+}
+
+let loadedPacks = [];
+
+function loadPackText(text, source) {
+  try {
+    const pack = parsePack(text);
+    pack.source = String(text);
+    loadedPacks = [...loadedPacks.filter((p) => p.id !== pack.id), pack];
+    applyPacks(loadedPacks);
+    try { localStorage.setItem(PACK_KEY, JSON.stringify(loadedPacks.map((p) => p.source))); } catch { /* full or blocked */ }
+    say(`${pack.title} loaded: ${pack.labs.length} item${pack.labs.length === 1 ? "" : "s"} added to the lab list.`);
+    return pack;
+    // eslint-disable-next-line no-unreachable
+  } catch (e) {
+    const host = $("packNote");
+    host.replaceChildren();
+    const box = document.createElement("div");
+    box.className = "pack-errors";
+    const head = document.createElement("p");
+    head.textContent = `${source} could not be loaded:`;
+    box.appendChild(head);
+    const ul = document.createElement("ul");
+    (e.problems || [e.message]).forEach((problem) => {
+      const li = document.createElement("li");
+      li.textContent = problem;
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+    host.appendChild(box);
+    say(`${source} could not be loaded. The problems are listed under the file button.`);
+    return null;
+  }
+}
+
+/** The exam as one link: nothing for a student to download or install. */
+$("btnPackLink").addEventListener("click", async () => {
+  const pack = loadedPacks[loadedPacks.length - 1];
+  if (!pack) return;
+  const url = await encodePackLink(pack.source);
+  try {
+    await navigator.clipboard.writeText(url);
+    say(`Exam link copied: ${Math.round(url.length / 1024)} kB. Post it on the course page; students click it and the exam is there.`);
+  } catch {
+    $("examCode").value = url;
+    $("examCode").select();
+    say("Copy was blocked. The link is in the result codes box — press Ctrl or Command C, then clear the box.");
+  }
+});
+
+/**
+ * An exam link, or a link to a hosted pack, opens the exam ready to sit.
+ * Students should not be loading files while an exam clock runs.
+ */
+async function loadPackFromLink() {
+  const hosted = new URLSearchParams(window.location.search).get("pack");
+  if (hosted) {
+    try {
+      const res = await fetch(hosted);
+      if (!res.ok) throw new Error(`the file came back as ${res.status}`);
+      const pack = loadPackText(await res.text(), "The exam pack");
+      if (pack) openFirstOf(pack);
+    } catch (e) {
+      say(`The exam pack at that address could not be fetched: ${e.message}`);
+    }
+    return;
+  }
+  try {
+    const text = await decodePackHash();
+    if (!text) return;
+    const pack = loadPackText(text, "The exam link");
+    if (pack) {
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+      openFirstOf(pack);
+    }
+  } catch (e) {
+    say(e.message);
+  }
+}
+
+/** Open a pack's first item, so a link lands the student on the exam. */
+function openFirstOf(pack) {
+  const first = pack.labs[0];
+  if (!first) return;
+  $("labSelect").value = first.id;
+  openLab(first);
+  setLab(first);
+  say(`${pack.title} opened: ${first.title}. Type your name under the sheet before you start.`);
+}
+
+$("packFile").addEventListener("change", async (evt) => {
+  const file = evt.target.files?.[0];
+  if (!file) return;
+  const text = await file.text();
+  loadPackText(text, file.name);
+  // Remember the pack itself, so it survives a reload on the exam machine.
+  try {
+    const kept = JSON.parse(localStorage.getItem(PACK_KEY) || "[]").filter(Boolean);
+    localStorage.setItem(PACK_KEY, JSON.stringify([...kept.filter((t) => t !== text), text]));
+  } catch { /* storage blocked */ }
+  evt.target.value = "";
+});
+
+$("btnPackClear").addEventListener("click", () => {
+  loadedPacks = [];
+  applyPacks([]);
+  try { localStorage.removeItem(PACK_KEY); } catch { /* blocked */ }
+  say("Loaded exam packs removed. The built-in labs are unchanged.");
+});
+
+// Packs loaded on this machine come back after a reload; a link beats them.
+try {
+  JSON.parse(localStorage.getItem(PACK_KEY) || "[]").forEach((text) => loadPackText(text, "The saved exam pack"));
+} catch { /* nothing kept */ }
+loadPackFromLink();
 
 $("btnLabReset").addEventListener("click", () => {
   if (!currentLab) return;
@@ -1715,4 +1932,6 @@ window.__spiceLab = { store, canvas, scope, run, refresh, runNetlist, shareUrl, 
   currentLab: () => currentLab,
   build: BUILD_STAMP,
   netlist: { parseValue },
-  simulate, diagram, buildSubmissionSheet, labDiagramSource, parts: { shapeOf, PARTS }, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor, variantFor, encodeOutcome, decodeOutcome, scoreOf } };
+  loadPackText,
+  packLink: async () => (loadedPacks.length ? encodePackLink(loadedPacks[loadedPacks.length - 1].source) : null),
+  simulate, diagram, buildSubmissionSheet, labDiagramSource, parts: { shapeOf, PARTS }, titleBlock: titleBlockState, labs: { LABS, runChecks, labById, corners, diagramFor, variantFor, labCircuit, encodeOutcome, decodeOutcome, scoreOf } };

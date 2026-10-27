@@ -1,0 +1,72 @@
+{
+  "id": "elec101-midterm",
+  "title": "ELEC 101 · Midterm",
+  "items": [
+    {
+      "code": "M1",
+      "kind": "draw",
+      "title": "M1 · Divider",
+      "summary": "Draw the divider from the paper and report the voltage at its output.",
+      "vary": {
+        "VS": ["9", "12", "15", "18"],
+        "R1": ["1k", "1.5k", "2.2k", "3.3k"],
+        "R2": ["2.2k", "3.3k", "4.7k", "6.8k"]
+      },
+      "tasks": [
+        "Type your name under the sheet before you start: your values depend on it.",
+        "Draw the circuit on the paper: VS = DC {VS} with R1 = {R1} above R2 = {R2}.",
+        "Name the junction between the resistors OUT, and ground the bottom of R2.",
+        "Set the analysis to Operating point and run it.",
+        "Enter the voltage at OUT, then press Submit exam answer once."
+      ],
+      "analysis": { "type": "op" },
+      "useStudentAnalysis": false,
+      "questions": [
+        { "id": "vout", "prompt": "Voltage at OUT, in volts", "expect": "VS*R2/(R1+R2)", "within": "2%", "points": 4 }
+      ],
+      "checks": [
+        { "check": "parts", "points": 3, "expect": { "R1": "{R1}", "R2": "{R2}", "VS": { "dc": "{VS}" } } },
+        { "check": "wiring", "points": 3, "rows": [
+          ["VS", [["R1", 0], 0], true],
+          ["R1", [["VS", 0], "OUT"]],
+          ["R2", ["OUT", 0]]
+        ] },
+        { "check": "noOpenEnds", "points": 1 },
+        { "check": "nodeVoltage", "points": 3, "node": "OUT", "expect": "VS*R2/(R1+R2)", "within": "2%" }
+      ]
+    },
+    {
+      "code": "M2",
+      "kind": "draw",
+      "title": "M2 · RC low-pass filter",
+      "summary": "Draw the filter from the paper, sweep it, and report its corner frequency.",
+      "vary": {
+        "R1": ["1k", "2.2k", "4.7k", "10k"],
+        "C1": ["10n", "22n", "47n", "100n"]
+      },
+      "tasks": [
+        "Type your name under the sheet before you start: your values depend on it.",
+        "Draw a series RC: VS (DC 0, AC 1) into R1 = {R1}, then C1 = {C1} to ground.",
+        "Name the input IN and the node across the capacitor OUT.",
+        "Sweep from 10 Hz to 1meg at 50 points per decade, probe OUT, and run it.",
+        "Enter the frequency where the output has fallen 3 dB, then press Submit exam answer once."
+      ],
+      "reference": { "type": "ac", "acPts": "50", "acStart": "1", "acStop": "10meg" },
+      "questions": [
+        { "id": "fc", "prompt": "The −3 dB frequency, in Hz", "expect": "1/(2*pi*R1*C1)", "within": "5%", "points": 4 }
+      ],
+      "checks": [
+        { "check": "parts", "points": 3, "expect": { "R1": "{R1}", "C1": "{C1}", "VS": { "dc": 0, "ac": 1, "type": "V" } } },
+        { "check": "wiring", "points": 3, "rows": [
+          ["VS", ["IN", 0], true],
+          ["R1", ["IN", "OUT"]],
+          ["C1", ["OUT", 0]]
+        ] },
+        { "check": "noOpenEnds", "points": 1 },
+        { "check": "analysis", "points": 2, "type": "ac", "start": 10, "stop": "1meg", "points_per_decade": 50, "pointsPerDecade": 50 },
+        { "check": "probe", "points": 1, "node": "OUT" },
+        { "check": "corner", "points": 3, "node": "OUT", "side": "high", "expect": "1/(2*pi*R1*C1)", "within": "8%" }
+      ]
+    }
+  ]
+}
