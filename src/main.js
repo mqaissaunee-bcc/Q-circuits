@@ -6,7 +6,7 @@
  * the validation messages from ever disagreeing with what is on the sheet.
  */
 
-import { PARTS, PALETTE, PALETTE_TABS, PART_ICONS, LAB_PARTS, pinsOf, netlistNameOf, isDigital, shapeOf, filledIndices } from "./parts.js";
+import { PARTS, PALETTE, PALETTE_TABS, PART_ICONS, LAB_PARTS, netlistNameOf, isDigital, shapeOf, filledIndices } from "./parts.js";
 import { buildNodes, nodesFor, validate, formatEng, paramValues, parseValue } from "./netlist.js";
 import { Store, DEFAULT_ANALYSIS, DEFAULT_PLOT, DEFAULT_TITLE_BLOCK } from "./store.js";
 import { createCanvas } from "./canvas.js";
@@ -339,10 +339,49 @@ document.addEventListener("keydown", (evt) => {
 
 /* ------------------------------------------------------------ inspector */
 
+/**
+ * Which part the panel was last built for. While the same part stays selected
+ * the panel is updated in place rather than rebuilt: rebuilding destroys the
+ * box being typed in, which drops focus after the first character and sends
+ * the rest of the keystrokes to the sheet's shortcuts (Backspace = delete).
+ */
+let inspectorFor = null;
+
+function syncInspector(host, c, def) {
+  host.querySelectorAll("[data-k]").forEach((el) => {
+    // Leave a box alone while it holds typing that has not been stored yet.
+    if (el._pending) return;
+    const k = el.dataset.k;
+    const want = String((k === "__label" ? c.label : c[k]) ?? "");
+    if (el.value !== want) el.value = want;
+  });
+  const hint = host.querySelector("[data-nodes]");
+  if (hint) hint.textContent = nodesHint(c, def);
+}
+
+function nodesHint(c, def) {
+  const net = lastNet();
+  if (!net) return "";
+  const nodes = nodesFor(c, net);
+  return def.pinNames.map((n, i) => `${n} → node ${nodes[i] ?? "?"}`).join(" · ");
+}
+
 function renderInspector() {
   const host = $("inspector");
-  host.replaceChildren();
   const comps = store.selectedComps();
+
+  if (comps.length === 1) {
+    const key = `${comps[0].id}|${comps[0].type}`;
+    if (inspectorFor === key && host.querySelector("[data-k]")) {
+      syncInspector(host, comps[0], PARTS[comps[0].type]);
+      return;
+    }
+    inspectorFor = key;
+  } else {
+    inspectorFor = null;
+  }
+
+  host.replaceChildren();
 
   if (!comps.length) {
     host.appendChild(muted("Nothing selected. Click a part on the sheet, or pick one from the parts table."));
@@ -361,34 +400,35 @@ function renderInspector() {
   heading.textContent = def.name;
   host.appendChild(heading);
 
+  // Look the part up again at edit time: undo and redo replace the state
+  // objects, and the panel is no longer rebuilt after them.
+  const id = c.id;
+  const setField = (k, v, reason) => {
+    store.edit((s) => {
+      const live = s.comps.find((x) => x.id === id);
+      if (live) live[k] = v;
+    }, reason);
+  };
+
   if (!def.noLabel) {
-    host.appendChild(field("Reference designator", "text", c.label, (v) => {
-      store.edit(() => { c.label = v; }, "label");
-    }));
+    const w = field("Reference designator", "text", c.label, (v) => setField("label", v, "label"));
+    w.querySelector("input").dataset.k = "__label";
+    host.appendChild(w);
   }
 
   def.fields.forEach((f) => {
-    if (f.options) {
-      host.appendChild(select(f.label, f.options, c[f.k], f.labels, (v) => {
-        store.edit(() => { c[f.k] = v; }, "field");
-      }, f.hint));
-    } else {
-      host.appendChild(field(f.label, "text", c[f.k] ?? "", (v) => {
-        store.edit(() => { c[f.k] = v; }, "field");
-      }, f.hint));
-    }
+    const w = f.options
+      ? select(f.label, f.options, c[f.k], f.labels, (v) => setField(f.k, v, "field"), f.hint)
+      : field(f.label, "text", c[f.k] ?? "", (v) => setField(f.k, v, "field"), f.hint);
+    w.querySelector("input, select").dataset.k = f.k;
+    host.appendChild(w);
   });
 
-  const pins = pinsOf(c);
-  const net = lastNet();
-  if (net) {
-    const nodes = nodesFor(c, net);
-    const p = document.createElement("p");
-    p.className = "field-hint";
-    p.textContent = def.pinNames.map((n, i) => `${n} → node ${nodes[i] ?? "?"}`).join(" · ");
-    host.appendChild(p);
-  }
-  void pins;
+  const p = document.createElement("p");
+  p.className = "field-hint";
+  p.dataset.nodes = "1";
+  p.textContent = nodesHint(c, def);
+  host.appendChild(p);
 }
 
 function muted(text) {
@@ -409,10 +449,19 @@ function field(label, type, value, onInput, hint) {
   input.type = type; input.id = id; input.value = value ?? "";
   input.autocomplete = "off"; input.spellcheck = false;
   let timer = null;
+  const flush = () => {
+    if (!input._pending) return;
+    clearTimeout(timer);
+    input._pending = false;
+    onInput(input.value);
+  };
   input.addEventListener("input", () => {
     clearTimeout(timer);
-    timer = setTimeout(() => onInput(input.value), 180);
+    input._pending = true;
+    timer = setTimeout(flush, 180);
   });
+  // Store at once on leaving the box, so Tab or a click on Run never races the delay.
+  input.addEventListener("blur", flush);
   wrap.append(l, input);
   if (hint) {
     const h = document.createElement("p");
