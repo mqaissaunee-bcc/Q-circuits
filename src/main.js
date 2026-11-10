@@ -1044,7 +1044,11 @@ function openLab(lab) {
 }
 
 function setLab(lab) {
+  const changed = (currentLab?.id || "") !== (lab?.id || "");
   currentLab = lab;
+  // Undo stops at the lab boundary, so one lab's circuit cannot be undone
+  // onto another lab's sheet (and then saved as that lab's work).
+  if (changed) store.forgetHistory();
   store.currentLabId = lab ? lab.id : "";
   // No reference diagram in an exam: the question paper is the only picture.
   $("btnDiagram").hidden = !lab || !!lab.exam;
@@ -1921,9 +1925,21 @@ async function boot() {
     }
     clearHash();
   } else if (!restored) {
-    store.state.analysis = { ...DEFAULT_ANALYSIS };
-    store.loadCircuit(LABS[0].circuit);
-    setLab(LABS[0]);
+    // An empty sheet is either a first visit or a draw-it-yourself lab that
+    // has nothing on it yet. Reloading must leave the student in that lab,
+    // not move them to the first one in the list.
+    const was = labById(store.currentLabId);
+    if (was) {
+      if (!store.openLabWork(was.id)) {
+        store.state.analysis = { ...DEFAULT_ANALYSIS };
+        store.loadCircuit(labCircuit(was, variantFor(was, store.state.titleBlock?.name)));
+      }
+      setLab(was);
+    } else {
+      store.state.analysis = { ...DEFAULT_ANALYSIS };
+      store.loadCircuit(LABS[0].circuit);
+      setLab(LABS[0]);
+    }
   } else {
     // Reopen the lab the student was in, if the sheet still belongs to it.
     const lab = labById(store.currentLabId);

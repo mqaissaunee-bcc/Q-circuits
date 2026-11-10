@@ -2491,6 +2491,60 @@ const phonePalette = await phone.evaluate(() => {
 });
 check("on a phone the palette scrolls sideways instead of wrapping", phonePalette.scrolls && phonePalette.rows < 110 && phonePalette.page === 0, JSON.stringify(phonePalette));
 
+
+/* A lab's sheet belongs to that lab. Undo must stop at the moment the lab was
+   opened, and every draw-it-yourself lab must open empty. */
+console.log("\n— lab boundaries —");
+const edge = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+edge.on("dialog", (d) => d.accept());
+await edge.goto(`http://localhost:${PORT}/`);
+await edge.waitForFunction(() => window.__spiceLab?.ready === true);
+const notEmpty = await edge.evaluate(() => {
+  const { labs, store } = window.__spiceLab;
+  const s = document.getElementById("labSelect");
+  return labs.LABS.filter((l) => l.kind === "draw").filter((l) => {
+    window.__spiceLab.freshLabs();
+    s.value = l.id; s.dispatchEvent(new Event("change"));
+    return store.state.comps.length + store.state.wires.length + store.state.probes.length > 0;
+  }).map((l) => l.id);
+});
+check("every draw-it-yourself lab opens with an empty sheet", notEmpty.length === 0, notEmpty.join(", "));
+const crossed = await edge.evaluate(async () => {
+  const { store } = window.__spiceLab;
+  const s = document.getElementById("labSelect");
+  window.__spiceLab.freshLabs();
+  s.value = "e101-12c"; s.dispatchEvent(new Event("change"));
+  store.edit((st) => { st.comps.push({ id: store.uid++, type: "OPAMP5", x: 300, y: 300, rot: 0, label: "U1", model: "LM324" }); }, "add");
+  s.value = "e101-09a"; s.dispatchEvent(new Event("change"));
+  const undoOff = document.getElementById("btnUndo").disabled;
+  store.undo();
+  await new Promise((r) => setTimeout(r, 600));
+  const kept = JSON.parse(localStorage.getItem("q-circuits-labwork-v1") || "{}");
+  return { undoOff, onSheet: store.state.comps.length, saved9a: kept["e101-09a"]?.doc.comps.length ?? 0, saved12c: kept["e101-12c"]?.doc.comps.length ?? 0 };
+});
+check("Undo is unavailable straight after a lab opens", crossed.undoOff);
+check("Undo cannot pull the previous lab's circuit onto this lab's sheet", crossed.onSheet === 0 && crossed.saved9a === 0, JSON.stringify(crossed));
+check("the previous lab keeps its own work", crossed.saved12c === 1, JSON.stringify(crossed));
+await edge.evaluate(() => {
+  window.__spiceLab.freshLabs();
+  const s = document.getElementById("labSelect");
+  s.value = "e101-09a"; s.dispatchEvent(new Event("change"));
+});
+await edge.reload();
+await edge.waitForFunction(() => window.__spiceLab?.ready === true);
+const afterReload = await edge.evaluate(() => ({ lab: window.__spiceLab.currentLab()?.id, n: window.__spiceLab.store.state.comps.length }));
+check("reloading inside an empty lab stays in that lab", afterReload.lab === "e101-09a" && afterReload.n === 0, JSON.stringify(afterReload));
+const stackedLabels = await edge.evaluate(() => {
+  const { store, canvas } = window.__spiceLab;
+  store.edit((st) => { st.probes = [{ kind: "v", x: 200, y: 200 }, { kind: "vd", x: 200, y: 200, x2: 300, y2: 200 }]; }, "probe");
+  canvas.render();
+  const ys = [...document.querySelectorAll("#sheetHost .probe-label")].map((t) => +t.getAttribute("y"));
+  store.edit((st) => { st.probes = []; }, "probe");
+  return ys;
+});
+check("two probe names on one spot stack instead of overprinting", stackedLabels.length === 2 && stackedLabels[0] !== stackedLabels[1], JSON.stringify(stackedLabels));
+await edge.close();
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 await browser.close();
 server.close();

@@ -432,11 +432,20 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
 
   function drawProbes() {
     const g = el("g", null, svg);
+    // Two probes on one spot (a voltage probe and the + end of a differential
+    // probe, as Lab 9 asks for) stack their names instead of overprinting.
+    const stacked = new Map();
+    const labelY = (pr) => {
+      const key = `${pr.x},${pr.y}`;
+      const n = stacked.get(key) || 0;
+      stacked.set(key, n + 1);
+      return pr.y + 14 + n * 13;
+    };
     store.state.probes.forEach((pr, i) => {
       if (pr.kind === "v") {
         const cls = `probe probe-${i % 6}`;
         el("circle", { cx: pr.x, cy: pr.y, r: 6, class: cls }, g);
-        const t = el("text", { x: pr.x + 9, y: pr.y + 14, class: "probe-label" }, g);
+        const t = el("text", { x: pr.x + 9, y: labelY(pr), class: "probe-label" }, g);
         t.textContent = probeName(pr);
       } else if (pr.kind === "vd") {
         const cls = `probe probe-${i % 6}`;
@@ -445,7 +454,7 @@ export function createCanvas({ host, store, onStatus, onSelectionChange, onNeeds
           const s2 = el("text", { x, y: y + 3.5, class: "probe-sign", "text-anchor": "middle" }, g);
           s2.textContent = sign;
         });
-        const t = el("text", { x: pr.x + 9, y: pr.y + 14, class: "probe-label" }, g);
+        const t = el("text", { x: pr.x + 9, y: labelY(pr), class: "probe-label" }, g);
         t.textContent = probeName(pr);
       } else {
         const c = store.state.comps.find((k) => netlistNameOf(k) === pr.ref);

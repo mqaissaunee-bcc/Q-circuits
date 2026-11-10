@@ -163,6 +163,18 @@ export class Store {
   }
 
   canUndo() { return this.past.length > 0; }
+
+  /**
+   * Drop the undo and redo history. Each lab keeps its own sheet, so Undo
+   * must not reach back past the moment a lab was opened: that would pull
+   * the previous lab's circuit onto this lab's sheet and save it there.
+   */
+  forgetHistory() {
+    this.past.length = 0;
+    this.future.length = 0;
+    this.pendingSnapshot = null;
+    this.emit("history");
+  }
   canRedo() { return this.future.length > 0; }
 
   /* ------------------------------------------------------------- lookups */
